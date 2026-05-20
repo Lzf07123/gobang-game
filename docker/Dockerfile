@@ -11,3 +11,4 @@ RUN git clone https://github.com/Lzf07123/Gobang-Game.git && \
 EXPOSE 8080
 EXPOSE 3000
 
+ENTRYPOINT ["bash", "/app/Gobang-Game/docker/run.sh"]
