@@ -11,5 +11,3 @@ RUN git clone https://github.com/Lzf07123/Gobang-Game.git && \
 EXPOSE 8080
 EXPOSE 3000
 
-ENTRYPOINT ["python", "/app/Gobang-Game/python_server/server.py"]
-CMD ["cd", "/app/Gobang-Game/public", "&&", "python", "-m", "http.server", "3000"]
