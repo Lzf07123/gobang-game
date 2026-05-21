@@ -8,6 +8,11 @@ let myColor = 0;    // 1=black, 2=white
 let myTurn = false;
 const SIZE = 15;
 
+// Backend base URL: uses <meta name="api-port"> for dev mode, same origin for reverse proxy
+const apiPort = document.querySelector('meta[name="api-port"]')?.content;
+const httpBase = apiPort ? `http://${location.hostname}:${apiPort}` : '';
+const wsBase = apiPort ? `ws://${location.hostname}:${apiPort}` : `ws://${location.host}`;
+
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const CELL = 30;
@@ -41,7 +46,7 @@ async function doRegister() {
 }
 
 async function apiPost(path, body) {
-  const resp = await fetch(`http://${location.hostname}:8080${path}`, {
+  const resp = await fetch(`${httpBase}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -52,7 +57,7 @@ async function apiPost(path, body) {
 // ===== WebSocket =====
 function connectWS() {
   if (ws) ws.close();
-  ws = new WebSocket(`ws://${location.hostname}:8080/ws?token=${token}`);
+  ws = new WebSocket(`${wsBase}/ws?token=${token}`);
 
   ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
   ws.onclose = () => {
