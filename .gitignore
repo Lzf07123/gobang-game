@@ -1,3 +1,4 @@
 .env
 python_server/__pycache__/
 libgobang.so
+CLAUDE.md

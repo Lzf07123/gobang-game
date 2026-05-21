@@ -1,0 +1,31 @@
+services:
+  gobang:
+    container_name: gobang_app
+    build: .
+    networks:
+      - gobang_network
+    ports:
+      - 8080:8080
+    depends_on:
+      - db
+
+  db:
+    container_name: gobang_db
+    image: mysql:latest
+    networks:
+      - gobang_network
+    ports:
+      - ${DB_PORT:-3306}:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-gobang}
+
+volumes:
+  gobang_db:
+    name: gobang_db
+    driver: local
+
+networks:
+  gobang:
+    name: gobang_network
+    driver: bridge
