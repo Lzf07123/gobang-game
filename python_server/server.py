@@ -10,7 +10,7 @@ from db import init_db, execute_query, check_env
 from auth import register, login, verify_token
 from game_engine import GameEngine
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
