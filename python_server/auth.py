@@ -2,6 +2,7 @@ import os
 import bcrypt
 import jwt
 import time
+import mysql.connector
 from db import execute_query
 
 _JWT_SECRET = os.getenv('JWT_SECRET', 'default-secret-change-me')
@@ -44,10 +45,13 @@ def register(username, password):
         return False, "用户名已存在"
 
     pw_hash = _hash_password(password)
-    execute_query(
-        "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-        (username, pw_hash), fetch=False
-    )
+    try:
+        execute_query(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+            (username, pw_hash), fetch=False
+        )
+    except mysql.connector.IntegrityError:
+        return False, "用户名已存在"
     return True, None
 
 
