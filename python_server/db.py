@@ -11,19 +11,24 @@ def check_env():
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 
-def _connect():
-    return mysql.connector.connect(
-        host=os.getenv('DB_HOST'),
-        port=int(os.getenv('DB_PORT', '3306')),
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASSWORD'),
-        database=os.getenv('DB_NAME'),
-    )
+def _get_conn():
+    global _pool
+    if _pool is None:
+        _pool = mysql.connector.pooling.MySQLConnectionPool(
+            pool_name="gobang",
+            pool_size=4,
+            host=os.getenv('DB_HOST'),
+            port=int(os.getenv('DB_PORT', '3306')),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME'),
+        )
+    return _pool.get_connection()
 
 
 def init_db():
     check_env()
-    conn = _connect()
+    conn = _get_conn()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -40,7 +45,7 @@ def init_db():
 
 def execute_query(sql, params=None, fetch=True):
     """Run a DB query in a thread-safe way (call from executor)."""
-    conn = _connect()
+    conn = _get_conn()
     cursor = conn.cursor(dictionary=True)
     try:
         cursor.execute(sql, params)

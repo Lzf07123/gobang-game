@@ -36,7 +36,10 @@ async def handle_register(request):
 
     username = body.get('username', '').strip()
     password = body.get('password', '')
-    ok, err = await _run_db(register, username, password)
+    try:
+        ok, err = await _run_db(register, username, password)
+    except Exception:
+        return web.json_response({'success': False, 'error': '服务器内部错误'}, status=500)
     if ok:
         return web.json_response({'success': True, 'user': {'username': username}})
     return web.json_response({'success': False, 'error': err})
@@ -50,7 +53,10 @@ async def handle_login(request):
 
     username = body.get('username', '').strip()
     password = body.get('password', '')
-    ok, result = await _run_db(login, username, password)
+    try:
+        ok, result = await _run_db(login, username, password)
+    except Exception:
+        return web.json_response({'success': False, 'error': '服务器内部错误'}, status=500)
     if ok:
         return web.json_response({'success': True, 'token': result, 'username': username})
     return web.json_response({'success': False, 'error': result})
