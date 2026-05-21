@@ -1,5 +1,5 @@
 #!/bin/bash
 
-python /app/Gobang-Game/python_server/server.py
+service gobangAuth.service start
 
-cd /app/Gobang-Game/public && python -m http.server 3000
+service gobangApp.service start
