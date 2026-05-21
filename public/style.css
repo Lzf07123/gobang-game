@@ -1,0 +1,77 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "Microsoft YaHei", sans-serif;
+  background: #1a1a2e;
+  color: #eee;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#app { text-align: center; }
+
+#auth-area {
+  background: #16213e;
+  padding: 2rem;
+  border-radius: 12px;
+  width: 320px;
+}
+
+#auth-area h1 { margin-bottom: 1.5rem; font-size: 1.5rem; }
+
+input {
+  display: block;
+  width: 100%;
+  padding: 0.6rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #0f3460;
+  color: #eee;
+  font-size: 1rem;
+}
+
+input:focus { outline: none; border-color: #e94560; }
+
+.btn-group {
+  display: flex;
+  gap: 0.8rem;
+}
+
+button {
+  flex: 1;
+  padding: 0.6rem;
+  border: none;
+  border-radius: 6px;
+  background: #e94560;
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+button:hover { opacity: 0.85; }
+
+#auth-msg { margin-top: 0.8rem; font-size: 0.9rem; color: #ff6b6b; }
+
+#game-area { display: flex; flex-direction: column; align-items: center; }
+
+.game-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+#status-text { font-size: 1.1rem; }
+
+#match-btn { flex: 0; padding: 0.5rem 1.5rem; }
+
+#canvas {
+  border-radius: 8px;
+  cursor: pointer;
+  background: #d4a76a;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
