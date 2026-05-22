@@ -15,5 +15,5 @@ RUN pip install -r python_server/requirements.txt
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "python_server.py"]
+ENTRYPOINT ["python", "python_server/server.py"]
 CMD ["--port", "8080"]
