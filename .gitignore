@@ -1,4 +1,5 @@
 .env
+.DS_Store
 python_server/__pycache__/
 libgobang.so
 CLAUDE.md
