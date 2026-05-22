@@ -5,7 +5,7 @@ services:
   #     context: .
   #     dockerfile: docker/gobangApp/Dockerfile
   #   networks:
-  #     - gobang_network
+  #     - gobang
   #   ports:
   #     - ${APPPORT:-3000}:3000
   #   depends_on:
@@ -26,12 +26,12 @@ services:
     #   - DB_PASSWORD=${DB_PASSWORD}
     #   - DB_NAME=${DB_NAME:-gobang}
     depends_on:
-      - db
+      - gobang_db
   gobang_db:
     container_name: gobang_db
     image: mysql:latest
     networks:
-      - gobang_network
+      - gobang
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
       - MYSQL_DATABASE=${DB_NAME:-gobang}
