@@ -1,17 +1,19 @@
-FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/debian:13.5
+FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/gcc:12.5.0-bookworm AS builder
 
 WORKDIR /app
-RUN apt-get update && \
-    apt-get install -y git && \
-    apt-get install -y python-is-python3 && \
-    git clone https://github.com/Lzf07123/Gobang-Game.git && \
-    cd Gobang-Game && \
-    pip install -r python_server/requirements.txt &&\
-    cd c_core/ && \
-    make && \
-    cp libgobang.so ../python_server/
+COPY ./c_core/ .
+RUN cd c_core/ && \
+    make
+
+
+FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/alpine:3.22.4 AS runner
+
+WORKDIR /app
+COPY ./python_server/ .
+COPY --from=builder /app/c_core/libgobang.so .
+RUN pip install -r python_server/requirements.txt
 
 EXPOSE 8080
-EXPOSE 3000
 
-ENTRYPOINT ["bash", "/app/Gobang-Game/docker/run.sh"]
+ENTRYPOINT ["python", "python_server.py"]
+CMD ["--port", "8080"]

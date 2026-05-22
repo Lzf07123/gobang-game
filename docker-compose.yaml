@@ -1,6 +1,18 @@
 services:
-  gobang:
+  gobang_app:
     container_name: gobang_app
+    build:
+      context: .
+      dockerfile: docker/gobangApp/Dockerfile
+    networks:
+      - gobang_network
+    ports:
+      - ${APPPORT:-3000}:3000
+    depends_on:
+      - gobang_auth
+
+  gobang_auth:
+    container_name: gobang_auth
     build: .
     networks:
       - gobang_network
@@ -14,13 +26,11 @@ services:
     depends_on:
       - db
 
-  db:
+  gobang_db:
     container_name: gobang_db
     image: mysql:latest
     networks:
       - gobang_network
-    ports:
-      - ${DB_PORT:-3306}:3306
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
       - MYSQL_DATABASE=${DB_NAME:-gobang}
