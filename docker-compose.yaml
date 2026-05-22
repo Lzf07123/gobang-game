@@ -1,15 +1,15 @@
 services:
-  # gobang_app:
-  #   container_name: gobang_app
-  #   build:
-  #     context: .
-  #     dockerfile: docker/gobangApp/Dockerfile
-  #   networks:
-  #     - gobang
-  #   ports:
-  #     - ${APPPORT:-3000}:3000
-  #   depends_on:
-  #     - gobang_auth
+  gobang_app:
+    container_name: gobang_app
+    build:
+      context: .
+      dockerfile: docker/gobangApp/Dockerfile
+    networks:
+      - gobang
+    ports:
+      - ${APPPORT:-3000}:3000
+    depends_on:
+      - gobang_auth
 
   gobang_auth:
     container_name: gobang_auth

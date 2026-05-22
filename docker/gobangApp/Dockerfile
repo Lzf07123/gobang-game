@@ -1,8 +1,11 @@
-FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/gcc:12.5.0-bookworm AS builder
+FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/python:3.13.13 AS runner
 
 WORKDIR /app
-COPY ./python_server/ .
-RUN apt-get install -y python-is-python3 && \
+COPY ./public/ .
+COPY ./python_server/requirements.txt .
+RUN pip install -r requirements.txt
+
+ENTRYPOINT [ "python", "-m", "http.server", "3000" ]
 
 
 
