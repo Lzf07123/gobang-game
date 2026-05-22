@@ -20,11 +20,6 @@ services:
       - gobang
     ports:
       - "${PORT:-8080}:8080"
-    # environment:
-    #   - PORT=${PORT:-8080}
-    #   - DB_PORT=${DB_PORT:-3306}
-    #   - DB_PASSWORD=${DB_PASSWORD}
-    #   - DB_NAME=${DB_NAME:-gobang}
     depends_on:
       - gobang_db
   gobang_db:
