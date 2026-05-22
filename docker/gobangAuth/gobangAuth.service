@@ -1,2 +1,0 @@
-[Service]
-ExecStart=/usr/local/bin/python3 /app/Gobang-Game/python_server/server.py

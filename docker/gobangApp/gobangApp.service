@@ -1,3 +1,0 @@
-[Service]
-WorkingDirectory=/app/Gobang-Game/public/
-ExecStart=/usr/local/bin/python3 -m http.server 3000
