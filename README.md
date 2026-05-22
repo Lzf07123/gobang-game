@@ -7,11 +7,26 @@
 ### Docker 部署（推荐）
 
 ```bash
-# 一键启动所有服务（MySQL + 后端 + 前端）
-docker compose -f docker/docker-compose.yaml up --build
+# 1. 配置环境变量 (修改 DB_PASSWORD 和 JWT_SECRET)
+#    注意: Docker 环境下 DB_HOST 填服务名 gobang_db, DB_USER 填 root
+cp python_server/.env.example python_server/.env
 
-# 浏览器访问 http://localhost:8080
+# 2. 一键启动所有服务 (MySQL + 后端 + 前端)
+docker compose up --build
+
+# 3. 浏览器访问 http://localhost:3000
+#    后端 WebSocket 运行在 http://localhost:8080
 ```
+
+**Docker 环境变量要求:**
+
+| 变量 | 示例值 | 说明 |
+|------|--------|------|
+| `DB_HOST` | `gobang_db` | 必须设为 `gobang_db` (Docker 服务名) |
+| `DB_USER` | `root` | 必须设为 `root` |
+| `DB_PASSWORD` | `your_password` | 设置你想要的数据库密码 |
+| `DB_NAME` | `gobang` | 数据库名 |
+| `JWT_SECRET` | `change_me` | JWT 签名密钥 |
 
 ### 手动启动
 
@@ -43,7 +58,10 @@ gobang/
 ├── c_core/             # C 核心: 棋盘状态、落子校验、胜负判定 (编译为 libgobang.so)
 ├── python_server/      # Python 后端: aiohttp HTTP + WebSocket 服务
 ├── public/             # 前端: Canvas 棋盘 + WebSocket 客户端
-├── docker/             # Docker 部署 (docker-compose + Dockerfile)
+├── docker/             # Docker 构建文件
+│   ├── gobangApp/      #   前端容器 (python -m http.server 3000)
+│   └── gobangAuth/     #   后端容器 (多阶段构建: 编译 C 库 + 运行 Python 服务)
+├── docker-compose.yaml # Docker Compose 定义 (gobang_app + gobang_auth + gobang_db)
 └── README.md
 ```
 
@@ -86,15 +104,15 @@ gobang/
 
 编辑 `python_server/.env`:
 
-| 变量 | 说明 | 必填 |
-|------|------|------|
-| `DB_HOST` | MySQL 主机地址 | 是 |
-| `DB_PORT` | MySQL 端口 (默认 3306) | 否 |
-| `DB_USER` | 数据库用户名 | 是 |
-| `DB_PASSWORD` | 数据库密码 | 是 |
-| `DB_NAME` | 数据库名 | 是 |
-| `JWT_SECRET` | JWT 签名密钥 | 否 |
-| `PORT` | 服务器监听端口 (默认 8080) | 否 |
+| 变量 | 说明 | Docker 环境要求 |
+|------|------|----------------|
+| `DB_HOST` | MySQL 主机地址 | 必须设为 `gobang_db` (Docker 服务名) |
+| `DB_PORT` | MySQL 端口 (默认 3306) | 保持默认 |
+| `DB_USER` | 数据库用户名 | 必须设为 `root` |
+| `DB_PASSWORD` | 数据库密码 | 与 docker-compose 中保持一致 |
+| `DB_NAME` | 数据库名 | 默认 `gobang` |
+| `JWT_SECRET` | JWT 签名密钥 | 自行设置 |
+| `PORT` | 服务器监听端口 (默认 8080) | 保持默认 |
 
 ## 环境要求
 
@@ -112,3 +130,5 @@ gobang/
 **WebSocket 连接失败？** 确认后端已启动, 端口未被占用。前端通过 `<meta name="api-port">` 确定后端地址。
 
 **同一台电脑测试联机？** 打开两个浏览器窗口 (普通 + 无痕), 分别注册账号, 各自登录后点击匹配。
+
+**Docker 部署后端连不上数据库？** 确保 `.env` 中 `DB_HOST=gobang_db` (Docker 内部服务名, 不是 `localhost`), `DB_USER=root`。
