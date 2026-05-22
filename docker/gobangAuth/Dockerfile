@@ -14,4 +14,4 @@ RUN pip install -r python_server/requirements.txt
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "python_server/server.py"]
+ENTRYPOINT [ "bash", "-c", "sleep 5 && python python_server/server.py" ]
