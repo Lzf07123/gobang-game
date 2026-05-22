@@ -4,7 +4,16 @@
 
 ## 快速启动
 
-### 手动启动（推荐）
+### Docker 部署（推荐）
+
+```bash
+# 一键启动所有服务（MySQL + 后端 + 前端）
+docker compose -f docker/docker-compose.yaml up --build
+
+# 浏览器访问 http://localhost:8080
+```
+
+### 手动启动
 
 ```bash
 # 1. 编译 C 动态库
@@ -25,8 +34,6 @@ cd ../public && python -m http.server 3000
 # 6. 浏览器访问 http://localhost:3000
 ```
 
-> Docker 部署版本还在开发中，暂不建议使用。参见 `docker/` 目录。
-
 ---
 
 ## 项目结构
@@ -36,7 +43,7 @@ gobang/
 ├── c_core/             # C 核心: 棋盘状态、落子校验、胜负判定 (编译为 libgobang.so)
 ├── python_server/      # Python 后端: aiohttp HTTP + WebSocket 服务
 ├── public/             # 前端: Canvas 棋盘 + WebSocket 客户端
-├── docker/             # Docker 部署 (开发中)
+├── docker/             # Docker 部署 (docker-compose + Dockerfile)
 └── README.md
 ```
 
@@ -93,6 +100,7 @@ gobang/
 
 - GCC 或 Clang (编译 C 动态库)
 - Python 3.8+, MySQL 服务器, 现代浏览器
+- 或 Docker & Docker Compose
 - Python 依赖: websockets, aiohttp, mysql-connector-python, bcrypt, PyJWT, python-dotenv
 
 ## 常见问题
