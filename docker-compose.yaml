@@ -13,31 +13,33 @@ services:
 
   gobang_auth:
     container_name: gobang_auth
-    build: .
+    build:
+      context: .
+      dockerfile: docker/gobangAuth/Dockerfile
     networks:
-      - gobang_network
+      - gobang
     ports:
       - "${PORT:-8080}:8080"
-    environment:
-      - PORT=${PORT:-8080}
-      - DB_PORT=${DB_PORT:-3306}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME:-gobang}
-    depends_on:
-      - db
-  # gobang_db:
-  #   container_name: gobang_db
-  #   image: mysql:latest
-  #   networks:
-  #     - gobang_network
-  #   environment:
-  #     - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
-  #     - MYSQL_DATABASE=${DB_NAME:-gobang}
+    # environment:
+    #   - PORT=${PORT:-8080}
+    #   - DB_PORT=${DB_PORT:-3306}
+    #   - DB_PASSWORD=${DB_PASSWORD}
+    #   - DB_NAME=${DB_NAME:-gobang}
+    # depends_on:
+    #   - db
+    # gobang_db:
+    #   container_name: gobang_db
+    #   image: mysql:latest
+    #   networks:
+    #     - gobang_network
+    #   environment:
+    #     - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
+    #     - MYSQL_DATABASE=${DB_NAME:-gobang}
 
-  # volumes:
-  #   gobang_db:
-  #     name: gobang_db
-  #     driver: local
+    # volumes:
+    #   gobang_db:
+    #     name: gobang_db
+    #     driver: local
 
 networks:
   gobang:
