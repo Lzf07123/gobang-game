@@ -3,7 +3,7 @@ services:
     container_name: gobang-app
     build:
       context: .
-      dockerfile: docker/gobangApp/Dockerfile
+      dockerfile: docker/gobang-app/Dockerfile
     networks:
       - gobang-network
     ports:
@@ -15,7 +15,7 @@ services:
     container_name: gobang-auth
     build:
       context: .
-      dockerfile: docker/gobangAuth/Dockerfile
+      dockerfile: docker/gobang-auth/Dockerfile
     networks:
       - gobang-network
     ports:
