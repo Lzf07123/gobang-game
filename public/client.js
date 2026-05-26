@@ -28,8 +28,9 @@ const ANIMATION_DURATION = 150; // ms
 
 // Backend URL
 const apiPort = document.querySelector('meta[name="api-port"]')?.content;
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const httpBase = apiPort ? `http://${location.hostname}:${apiPort}` : '';
-const wsBase = apiPort ? `ws://${location.hostname}:${apiPort}` : `ws://${location.host}`;
+const wsBase = apiPort ? `${wsProtocol}//${location.hostname}:${apiPort}` : `${wsProtocol}//${location.host}`;
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
