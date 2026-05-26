@@ -1,6 +1,39 @@
 import ctypes
 import os
 
+BOARD_SIZE = 15
+EMPTY = 0
+BLACK = 1
+WHITE = 2
+
+
+def check_winner_on_board(board):
+    """Python implementation of win detection for any board state.
+    Supports multiple concurrent games unlike the singleton C engine."""
+    dirs = [(1, 0), (0, 1), (1, 1), (1, -1)]
+    for y in range(BOARD_SIZE):
+        for x in range(BOARD_SIZE):
+            c = board[y][x]
+            if c == EMPTY:
+                continue
+            for dx, dy in dirs:
+                cnt = 1
+                for s in range(1, 5):
+                    nx, ny = x + dx * s, y + dy * s
+                    if nx < 0 or nx >= BOARD_SIZE or ny < 0 or ny >= BOARD_SIZE:
+                        break
+                    if board[ny][nx] != c:
+                        break
+                    cnt += 1
+                if cnt >= 5:
+                    return c
+    return 0
+
+
+def make_board():
+    """Create a fresh empty board."""
+    return [[EMPTY] * BOARD_SIZE for _ in range(BOARD_SIZE)]
+
 
 class GameEngine:
     _instance = None

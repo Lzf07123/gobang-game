@@ -12,6 +12,8 @@ COPY ./python-server/ ./python-server/
 COPY --from=builder /app/c-core/libgobang.so ./python-server/
 RUN pip install -r python-server/requirements.txt
 
+ENV PYTHONUNBUFFERED=1
+
 EXPOSE 8080
 
-ENTRYPOINT [ "bash", "-c", "sleep 5 && python python-server/server.py" ]
+ENTRYPOINT [ "bash", "-c", "sleep 10 && python python-server/server.py" ]

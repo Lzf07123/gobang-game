@@ -1,11 +1,17 @@
 import os
+import secrets
 import bcrypt
 import jwt
 import time
 import mysql.connector
 from db import execute_query
 
-_JWT_SECRET = os.getenv('JWT_SECRET', 'default-secret-change-me')
+_JWT_SECRET = os.getenv('JWT_SECRET', '')
+if not _JWT_SECRET or _JWT_SECRET == 'your_jwt_secret_key_change_me':
+    _JWT_SECRET = secrets.token_hex(32)
+    print("⚠ JWT_SECRET 未设置或使用默认值，已自动生成临时密钥（重启后失效）")
+    print("   请将以下密钥写入 python_server/.env 中的 JWT_SECRET= 使其持久化：")
+    print(f"   JWT_SECRET={_JWT_SECRET}")
 _JWT_EXPIRY = 7200  # 2 hours
 
 
