@@ -28,9 +28,16 @@ const ANIMATION_DURATION = 150; // ms
 
 // Backend URL
 const apiPort = document.querySelector('meta[name="api-port"]')?.content;
-const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const httpBase = apiPort ? `http://${location.hostname}:${apiPort}` : '';
-const wsBase = apiPort ? `${wsProtocol}//${location.hostname}:${apiPort}` : `${wsProtocol}//${location.host}`;
+const isHttps = location.protocol === 'https:';
+const wsProtocol = isHttps ? 'wss:' : 'ws:';
+
+// When the page is HTTPS, assume reverse proxy — use same-origin URLs,
+// since mixed content (HTTPS page → HTTP backend) is blocked by browsers.
+const sameOrigin = !apiPort || isHttps;
+const httpBase = sameOrigin ? '' : `http://${location.hostname}:${apiPort}`;
+const wsBase = sameOrigin
+  ? `${wsProtocol}//${location.host}`
+  : `${wsProtocol}//${location.hostname}:${apiPort}`;
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
