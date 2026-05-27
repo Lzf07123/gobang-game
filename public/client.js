@@ -1191,11 +1191,9 @@ function handleCanvasInput(clientX, clientY) {
   if (!gameStarted || !myTurn || isSpectator) return;
 
   const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  // Convert CSS-pixel click position to logical drawing coordinates.
-  // canvas.width = size * dpr, so dividing by dpr yields logical space.
-  const px = (clientX - rect.left) * (canvas.width / rect.width) / dpr;
-  const py = (clientY - rect.top) * (canvas.height / rect.height) / dpr;
+  // Map CSS-pixel click position to logical 480×480 drawing space
+  const px = (clientX - rect.left) * (LOGICAL_SIZE / rect.width);
+  const py = (clientY - rect.top) * (LOGICAL_SIZE / rect.height);
 
   let bestDist = Infinity, bx = -1, by = -1;
   for (let y = 0; y < SIZE; y++) {
@@ -1268,19 +1266,26 @@ function resetGameState() {
 }
 
 // ===== Canvas Sizing (Responsive) =====
+const LOGICAL_SIZE = 480;
+
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const maxWidth = Math.min(window.innerWidth - 40, 480);
+  const maxWidth = Math.min(window.innerWidth - 40, LOGICAL_SIZE);
   const maxHeight = window.innerHeight - 220;
-  const size = Math.min(maxWidth, maxHeight, 480);
+  const size = Math.min(maxWidth, maxHeight, LOGICAL_SIZE);
   canvas.width = size * dpr;
   canvas.height = size * dpr;
   canvas.style.width = size + 'px';
   canvas.style.height = size + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Scale logical 480×480 drawing space to fit the actual canvas
+  const scale = size / LOGICAL_SIZE;
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
 }
 
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  drawBoard();
+});
 resizeCanvas();
 
 // ===== Chat toggle for mobile =====
