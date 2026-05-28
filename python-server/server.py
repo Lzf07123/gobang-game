@@ -487,11 +487,18 @@ async def _on_message(ws, raw):
 
 
 async def _handle_auth(ws, token):
+    token_preview = token[:20] + '...' if len(token) > 20 else (token or '<empty>')
+    logger.info(f"Auth attempt: token={token_preview}")
+
     username, session_id = verify_token(token)
     if not username:
+        logger.warning(f"Auth FAILED: token verification returned None "
+                       f"(wrong secret or expired). token_preview={token_preview}")
         await _send(ws, {'type': 'error', 'error': 'Token无效或已过期'})
         await ws.close()
         return
+
+    logger.info(f"Auth token verified: username={username} session_id={session_id[:8] if session_id else '<none>'}...")
 
     # Validate session against database — only the most recent login
     # session is valid.  This prevents tokens from being used after a
@@ -500,10 +507,12 @@ async def _handle_auth(ws, token):
         try:
             db_session = await _run_db(get_user_session, username)
             if db_session and db_session != session_id:
-                logger.info(f"Session mismatch for {username}: token={session_id[:8]}..., db={db_session[:8]}...")
+                logger.warning(f"Auth FAILED: session mismatch for {username} "
+                               f"(token={session_id[:8]}... db={db_session[:8]}...)")
                 await _send(ws, {'type': 'error', 'error': '会话已失效，请重新登录'})
                 await ws.close()
                 return
+            logger.info(f"Auth session valid: {username} (matched db={db_session[:8] if db_session else '<none>'}...)")
         except Exception as e:
             logger.warning(f"Session validation DB error for {username}: {e}")
 
@@ -583,6 +592,8 @@ async def _handle_auth(ws, token):
         'session_id': session_id,
     }
     await _send(ws, {'type': 'auth_ok', 'username': username, 'display_name': display_name})
+    logger.info(f"Auth SUCCESS: {username} (room={transferred_room_id or 'none'}, "
+                f"ws_id={id(ws)}, total_clients={len(clients)})")
 
     # If reconnected to an active room, sync state to the client
     if transferred_room_id and transferred_room_id in rooms:

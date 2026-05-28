@@ -315,17 +315,21 @@ function connectWS() {
   if (ws) { ws.onclose = null; ws.close(); }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
+  console.log('[ws] connecting to', `${wsBase}/ws`, 'token preview:', token ? token.substring(0, 20) + '...' : '<empty>');
   ws = new WebSocket(`${wsBase}/ws`);
   ws.onopen = () => {
+    console.log('[ws] connected, sending auth');
     reconnectAttempts = 0;
     ws.send(JSON.stringify({ type: 'auth', token }));
   };
   ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    console.log('[ws] closed code=' + e.code + ' reason=' + (e.reason || 'none') + ' wasClean=' + e.wasClean);
     ws = null;
     matching = false;
     if (kickedOut) return;
     if (reconnectAttempts >= MAX_RECONNECT) {
+      console.log('[ws] max reconnect attempts reached, giving up');
       setStatus('连接失败，请刷新页面重试');
       reconnectAttempts = 0;
       return;
@@ -334,6 +338,7 @@ function connectWS() {
       reconnectAttempts++;
       const delay = Math.min(10000, 1000 * Math.pow(2, reconnectAttempts))
                     + Math.random() * 1000;
+      console.log('[ws] reconnect attempt', reconnectAttempts, '/', MAX_RECONNECT, 'delay=', Math.round(delay));
       setStatus(`连接断开，${Math.round(delay/1000)}秒后重连(${reconnectAttempts}/${MAX_RECONNECT})...`);
       reconnectTimer = setTimeout(() => {
         if (localStorage.getItem('goban_token')) connectWS();
@@ -342,18 +347,20 @@ function connectWS() {
       reconnectAttempts++;
       const delay = Math.min(10000, 1000 * Math.pow(2, reconnectAttempts))
                     + Math.random() * 500;
+      console.log('[ws] reconnect attempt', reconnectAttempts, '/', MAX_RECONNECT, 'delay=', Math.round(delay));
       setStatus(`连接断开，正在重连(${reconnectAttempts}/${MAX_RECONNECT})...`);
       reconnectTimer = setTimeout(() => {
         if (!ws && localStorage.getItem('goban_token')) connectWS();
       }, delay);
     }
   };
-  ws.onerror = () => {};
+  ws.onerror = (e) => { console.log('[ws] error event', e); };
 }
 
 function handleMessage(data) {
   switch (data.type) {
     case 'auth_ok':
+      console.log('[auth_ok] received, display_name:', data.display_name, 'username:', data.username);
       if (data.display_name) {
         displayName = data.display_name;
         localStorage.setItem('goban_display_name', displayName);
@@ -477,11 +484,13 @@ function handleMessage(data) {
 
     case 'error':
       if (data.error && (data.error.includes('Token') || data.error.includes('认证') || data.error.includes('会话'))) {
+        console.log('[error] auth failure detected:', data.error, '- clearing localStorage and showing auth area');
         localStorage.removeItem('goban_token');
         localStorage.removeItem('goban_account');
         showAuthArea();
         return;
       }
+      console.log('[error]', data.error);
       setStatus(`错误：${data.error}`);
       break;
 
@@ -1547,12 +1556,17 @@ document.addEventListener('click', (e) => {
   document.getElementById('sound-toggle-btn').textContent = soundEnabled ? '🔊' : '🔇';
   const savedToken = localStorage.getItem('goban_token');
   const savedAccount = localStorage.getItem('goban_account');
+  console.log('[init] savedToken:', savedToken ? savedToken.substring(0, 30) + '...' : '<none>',
+              'savedAccount:', savedAccount || '<none>');
   if (savedToken && savedAccount) {
     kickedOut = false;
     token = savedToken;
     username = savedAccount;
     displayName = localStorage.getItem('goban_display_name') || savedAccount;
+    console.log('[init] auto-login with saved token, username:', username);
     showGameArea(displayName);
     connectWS();
+  } else {
+    console.log('[init] no saved token, showing auth area');
   }
 })();

@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import hashlib
 import secrets
 import bcrypt
 import jwt
@@ -57,6 +58,11 @@ def _load_jwt_secret():
 _JWT_SECRET = _load_jwt_secret()
 _JWT_EXPIRY = 604800  # 7 days
 
+# Log a stable fingerprint so operators can verify the secret is consistent
+# across restarts (different fingerprint = different secret = tokens invalidated).
+_SECRET_FP = hashlib.sha256(_JWT_SECRET.encode()).hexdigest()[:12]
+print(f"[auth] JWT_SECRET fingerprint: {_SECRET_FP}")
+
 
 def _hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -76,12 +82,19 @@ def _make_token(username, session_id):
 
 
 def verify_token(token):
+    """Verify a JWT token. Returns (username, session_id) or (None, None)."""
     try:
         payload = jwt.decode(token, _JWT_SECRET, algorithms=['HS256'])
-        return payload['username'], payload.get('session_id', '')
+        username = payload.get('username') if isinstance(payload, dict) else None
+        if not username:
+            print(f"[auth] Token rejected: missing username in payload keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}")
+            return None, None
+        return username, payload.get('session_id', '')
     except jwt.ExpiredSignatureError:
+        print(f"[auth] Token rejected: expired (exp claim)")
         return None, None
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        print(f"[auth] Token rejected: invalid signature or malformed — {e}")
         return None, None
 
 
