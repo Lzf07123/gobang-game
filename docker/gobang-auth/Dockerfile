@@ -17,4 +17,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-ENTRYPOINT [ "bash", "-c", "python python-server/server.py" ]
+ENTRYPOINT [ "python", "python-server/server.py" ]

@@ -1375,10 +1375,6 @@ function drawWinLineHighlight(points, theme) {
 
 function animatePiece(x, y, color) {
   let start = null;
-  const animCanvas = document.createElement('canvas');
-  animCanvas.width = canvas.width;
-  animCanvas.height = canvas.height;
-  const animCtx = animCanvas.getContext('2d');
 
   function frame(timestamp) {
     if (!start) start = timestamp;

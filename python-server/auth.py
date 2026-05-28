@@ -19,7 +19,7 @@ if not _JWT_SECRET or _JWT_SECRET == 'your_jwt_secret_key_change_me':
     print(f"JWT_SECRET={_JWT_SECRET}")
     print("=" * 60)
     import sys; sys.exit(1)
-_JWT_EXPIRY = 7200  # 2 hours
+_JWT_EXPIRY = 604800  # 7 days
 
 
 def _hash_password(password):

@@ -532,16 +532,12 @@ async def _handle_auth(ws, token):
     if grace:
         grace['task'].cancel()
 
-    # Find and replace any existing stale connection with same session_id.
-    # Prefer an active client (e.g., another tab) over the grace-period ws.
+    # Only transfer state from grace-period (disconnected) connections, never
+    # from active clients which belong to another tab.  Otherwise refreshing one
+    # tab would steal the room from an active tab with the same session.
     transferred_room_id = None
     old_ws = None
-    for candidate_ws, candidate_info in list(clients.items()):
-        if candidate_info.get('username') == username and candidate_info.get('session_id') == session_id:
-            old_ws = candidate_ws
-            transferred_room_id = candidate_info.get('room_id')
-            break
-    if old_ws is None and grace:
+    if grace:
         old_ws = grace.get('ws')
         transferred_room_id = grace.get('room_id')
 
