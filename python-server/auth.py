@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import secrets
 import bcrypt
 import jwt
@@ -10,15 +11,50 @@ from db import execute_query, set_user_session
 _ACCOUNT_RE = re.compile(r'^[a-zA-Z0-9]{2,20}$')
 _DISPLAY_NAME_RE = re.compile(r'^[\w一-鿿]{2,20}$')
 
-_JWT_SECRET = os.getenv('JWT_SECRET', '')
-if not _JWT_SECRET or _JWT_SECRET == 'your_jwt_secret_key_change_me':
-    _JWT_SECRET = secrets.token_hex(32)
+
+def _load_jwt_secret():
+    """Load JWT_SECRET from environment or .env file.
+
+    Tries os.environ first, then reads .env directly as a fallback.
+    load_dotenv(override=False) skips keys already in os.environ — even
+    when the value is empty (Docker sets empty env vars).  Direct file
+    read bypasses that trap.
+    """
+    secret = os.getenv('JWT_SECRET', '').strip()
+    if secret and secret != 'your_jwt_secret_key_change_me':
+        return secret
+
+    # Fallback: read .env directly so an empty env var (e.g. from Docker)
+    # doesn't hide a valid value in the file.
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('JWT_SECRET=') or line.startswith('JWT_SECRET '):
+                    _, _, val = line.partition('=')
+                    # Strip value, remove trailing inline comment
+                    val = val.strip()
+                    if '#' in val:
+                        val = val.split('#')[0].strip()
+                    if val and val != 'your_jwt_secret_key_change_me':
+                        return val
+    except FileNotFoundError:
+        pass
+
+    # Neither source provided a valid secret — refuse to start
+    secret = secrets.token_hex(32)
     print("=" * 60)
     print("错误: JWT_SECRET 未设置或使用默认值！")
-    print("请将以下密钥写入 python_server/.env 中的 JWT_SECRET= 后重启：")
-    print(f"JWT_SECRET={_JWT_SECRET}")
+    print("请将以下密钥写入 python-server/.env 中的 JWT_SECRET= 后重启：")
+    print(f"JWT_SECRET={secret}")
     print("=" * 60)
-    import sys; sys.exit(1)
+    sys.exit(1)
+
+
+_JWT_SECRET = _load_jwt_secret()
 _JWT_EXPIRY = 604800  # 7 days
 
 

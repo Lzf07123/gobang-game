@@ -476,7 +476,7 @@ function handleMessage(data) {
       break;
 
     case 'error':
-      if (data.error && (data.error.includes('Token') || data.error.includes('认证'))) {
+      if (data.error && (data.error.includes('Token') || data.error.includes('认证') || data.error.includes('会话'))) {
         localStorage.removeItem('goban_token');
         localStorage.removeItem('goban_account');
         showAuthArea();

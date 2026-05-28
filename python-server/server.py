@@ -493,6 +493,20 @@ async def _handle_auth(ws, token):
         await ws.close()
         return
 
+    # Validate session against database — only the most recent login
+    # session is valid.  This prevents tokens from being used after a
+    # new login on another device overwrites the session.
+    if session_id:
+        try:
+            db_session = await _run_db(get_user_session, username)
+            if db_session and db_session != session_id:
+                logger.info(f"Session mismatch for {username}: token={session_id[:8]}..., db={db_session[:8]}...")
+                await _send(ws, {'type': 'error', 'error': '会话已失效，请重新登录'})
+                await ws.close()
+                return
+        except Exception as e:
+            logger.warning(f"Session validation DB error for {username}: {e}")
+
     # Look up display_name from database
     display_name = None
     try:
