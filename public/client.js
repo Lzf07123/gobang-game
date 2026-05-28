@@ -179,7 +179,7 @@ async function doLogin() {
       kickedOut = false;
       token = res.token;
       username = res.account;
-      displayName = res.display_name;
+      displayName = res.display_name || res.account;
       localStorage.setItem('goban_token', token);
       localStorage.setItem('goban_account', username);
       localStorage.setItem('goban_display_name', displayName);
@@ -258,12 +258,13 @@ function switchAuthTab(tab) {
 
 // ===== UI Toggles =====
 function showGameArea(user) {
+  const name = user || 'Player';
   document.getElementById('auth-area').style.display = 'none';
   document.getElementById('game-area').style.display = 'flex';
-  document.getElementById('username-display').textContent = user;
-  document.getElementById('avatar').textContent = user.charAt(0).toUpperCase();
+  document.getElementById('username-display').textContent = name;
+  document.getElementById('avatar').textContent = name.charAt(0).toUpperCase();
   document.getElementById('logout-btn').style.display = '';
-  setStatus(`欢迎，${user}`);
+  setStatus(`欢迎，${name}`);
 }
 
 function showAuthArea() {
@@ -843,6 +844,11 @@ function doLogout() {
   localStorage.removeItem('goban_account');
   localStorage.removeItem('goban_display_name');
   document.getElementById('profile-panel').style.display = 'none';
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
   showAuthArea();
 }
 

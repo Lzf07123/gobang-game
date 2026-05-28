@@ -86,4 +86,4 @@ def login(account, password):
     set_user_session(row['username'], session_id)
 
     token = _make_token(row['username'], session_id)
-    return True, (token, row['display_name'])
+    return True, (token, row['display_name'] or row['username'])
