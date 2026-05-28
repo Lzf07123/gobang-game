@@ -2,8 +2,10 @@
 let token = '';
 let username = '';   // account (login ID)
 let displayName = ''; // display name
+const SIZE = 15;
+
 let ws = null;
-let board = [];
+let board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
 let gameStarted = false;
 let myColor = 0;    // 1=black, 2=white
 let myTurn = false;
@@ -21,6 +23,7 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 let kickedOut = false;
 let pendingMessages = [];  // queued messages to send after auth_ok
+let autoLoginPending = false;  // true during init() auto-login, cleared on auth_ok or auth error
 const MAX_RECONNECT = 8;
 
 // Game records for replay
@@ -30,7 +33,6 @@ let replayMode = false;
 let replayMoves = [];
 let replayIndex = -1;
 
-const SIZE = 15;
 const BASE_SIZE = 480;
 const BASE_CELL = 30;
 const BASE_PAD = 15;
@@ -293,6 +295,7 @@ function showAuthArea() {
 
 function handleKicked(message) {
   kickedOut = true;
+  autoLoginPending = false;
   token = '';
   username = '';
   displayName = '';
@@ -328,6 +331,31 @@ function connectWS() {
     ws = null;
     matching = false;
     if (kickedOut) return;
+
+    // Auto-login: limit reconnect attempts and show status in auth area
+    if (autoLoginPending) {
+      if (reconnectAttempts >= 3) {
+        console.log('[ws] auto-login reconnect limit reached, giving up');
+        autoLoginPending = false;
+        localStorage.removeItem('goban_token');
+        localStorage.removeItem('goban_account');
+        reconnectAttempts = 0;
+        const msgEl = document.getElementById('auth-msg');
+        if (msgEl) { msgEl.textContent = '无法连接到服务器，请检查网络后重试'; msgEl.className = ''; }
+        showAuthArea();
+        return;
+      }
+      reconnectAttempts++;
+      const delay = Math.min(8000, 500 * Math.pow(2, reconnectAttempts)) + Math.random() * 500;
+      console.log('[ws] auto-login reconnect attempt', reconnectAttempts, '/3 delay=', Math.round(delay));
+      const msgEl = document.getElementById('auth-msg');
+      if (msgEl) { msgEl.textContent = `正在连接服务器(${reconnectAttempts}/3)...`; msgEl.className = ''; }
+      reconnectTimer = setTimeout(() => {
+        if (!ws && localStorage.getItem('goban_token')) connectWS();
+      }, delay);
+      return;
+    }
+
     if (reconnectAttempts >= MAX_RECONNECT) {
       console.log('[ws] max reconnect attempts reached, giving up');
       setStatus('连接失败，请刷新页面重试');
@@ -364,9 +392,13 @@ function handleMessage(data) {
       if (data.display_name) {
         displayName = data.display_name;
         localStorage.setItem('goban_display_name', displayName);
-        document.getElementById('username-display').textContent = displayName;
-        document.getElementById('avatar').textContent = displayName.charAt(0).toUpperCase();
       }
+      if (autoLoginPending) {
+        autoLoginPending = false;
+        showGameArea(displayName || username);
+      }
+      document.getElementById('username-display').textContent = displayName || username;
+      document.getElementById('avatar').textContent = (displayName || username).charAt(0).toUpperCase();
       setStatus('已连接，准备就绪');
       // Flush any queued messages BEFORE resetGameState (which clears the queue)
       const queued = pendingMessages.splice(0);
@@ -485,6 +517,7 @@ function handleMessage(data) {
     case 'error':
       if (data.error && (data.error.includes('Token') || data.error.includes('认证') || data.error.includes('会话'))) {
         console.log('[error] auth failure detected:', data.error, '- clearing localStorage and showing auth area');
+        autoLoginPending = false;
         localStorage.removeItem('goban_token');
         localStorage.removeItem('goban_account');
         showAuthArea();
@@ -1564,7 +1597,9 @@ document.addEventListener('click', (e) => {
     username = savedAccount;
     displayName = localStorage.getItem('goban_display_name') || savedAccount;
     console.log('[init] auto-login with saved token, username:', username);
-    showGameArea(displayName);
+    autoLoginPending = true;
+    const msgEl = document.getElementById('auth-msg');
+    if (msgEl) { msgEl.textContent = '正在自动登录...'; msgEl.className = ''; }
     connectWS();
   } else {
     console.log('[init] no saved token, showing auth area');
