@@ -1,8 +1,10 @@
 #include "rules.h"
 #include "board.h"
 
-static int dirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
+const int dirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
 
+/* Deprecated: operates on the static board. Use check_winner_on() with an
+   explicit board parameter for multi-room support. */
 int check_winner(int last_x, int last_y) {
     int c = get_cell(last_x, last_y);
     if (c == EMPTY) return 0;
@@ -59,6 +61,7 @@ int get_win_line(int last_x, int last_y, int out_xs[5], int out_ys[5]) {
 }
 
 int check_winner_on(const int board[BOARD_SIZE][BOARD_SIZE], int last_x, int last_y) {
+    if (last_x < 0 || last_x >= BOARD_SIZE || last_y < 0 || last_y >= BOARD_SIZE) return 0;
     int c = board[last_y][last_x];
     if (c == EMPTY) return 0;
     for (int d = 0; d < 4; d++) {
@@ -83,6 +86,7 @@ int check_winner_on(const int board[BOARD_SIZE][BOARD_SIZE], int last_x, int las
 
 int get_win_line_on(const int board[BOARD_SIZE][BOARD_SIZE], int last_x, int last_y,
                     int out_xs[5], int out_ys[5]) {
+    if (last_x < 0 || last_x >= BOARD_SIZE || last_y < 0 || last_y >= BOARD_SIZE) return 0;
     int c = board[last_y][last_x];
     if (c == EMPTY) return 0;
     for (int d = 0; d < 4; d++) {

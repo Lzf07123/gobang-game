@@ -8,6 +8,9 @@
 #define FORBID_DOUBLE_FOUR   2
 #define FORBID_OVERLINE      3
 
+/* Shared direction vectors for line-scanning algorithms */
+extern const int dirs[4][2];
+
 int check_winner(int last_x, int last_y);
 int get_win_line(int last_x, int last_y, int out_xs[5], int out_ys[5]);
 int check_winner_on(const int board[BOARD_SIZE][BOARD_SIZE], int last_x, int last_y);

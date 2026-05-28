@@ -13,9 +13,12 @@ _DISPLAY_NAME_RE = re.compile(r'^[\w一-鿿]{2,20}$')
 _JWT_SECRET = os.getenv('JWT_SECRET', '')
 if not _JWT_SECRET or _JWT_SECRET == 'your_jwt_secret_key_change_me':
     _JWT_SECRET = secrets.token_hex(32)
-    print("⚠ JWT_SECRET 未设置或使用默认值，已自动生成临时密钥（重启后失效）")
-    print("   请将以下密钥写入 python_server/.env 中的 JWT_SECRET= 使其持久化：")
-    print(f"   JWT_SECRET={_JWT_SECRET}")
+    print("=" * 60)
+    print("错误: JWT_SECRET 未设置或使用默认值！")
+    print("请将以下密钥写入 python_server/.env 中的 JWT_SECRET= 后重启：")
+    print(f"JWT_SECRET={_JWT_SECRET}")
+    print("=" * 60)
+    import sys; sys.exit(1)
 _JWT_EXPIRY = 7200  # 2 hours
 
 
@@ -47,12 +50,16 @@ def verify_token(token):
 
 
 def register(account, display_name, password):
+    if not isinstance(account, str) or not isinstance(display_name, str) or not isinstance(password, str):
+        return False, "参数格式无效"
     if not account or not _ACCOUNT_RE.match(account):
         return False, "账号仅支持字母和数字，2-20个字符"
     if not display_name or not _DISPLAY_NAME_RE.match(display_name):
         return False, "用户名仅支持中英文、数字、下划线，2-20个字符"
     if len(password) < 6:
         return False, "密码长度至少6位"
+    if len(password) > 128:
+        return False, "密码长度不能超过128位"
 
     existing = execute_query(
         "SELECT id FROM users WHERE account = %s", (account,)
@@ -72,6 +79,8 @@ def register(account, display_name, password):
 
 
 def login(account, password):
+    if not isinstance(account, str) or not isinstance(password, str):
+        return False, "参数格式无效"
     rows = execute_query(
         "SELECT username, display_name, password_hash FROM users WHERE account = %s", (account,)
     )

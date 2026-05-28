@@ -22,18 +22,45 @@
       <p class="auth-subtitle">双人联机 · 实时对战</p>
     </div>
     <div class="auth-form">
-      <div class="input-group">
-        <input id="username" type="text" placeholder="用户名" autocomplete="username">
-        <label class="input-label" for="username">用户名</label>
+      <div class="auth-tabs">
+        <button class="auth-tab active" onclick="switchAuthTab('login')">登录</button>
+        <button class="auth-tab" onclick="switchAuthTab('register')">注册</button>
       </div>
-      <div class="input-group">
-        <input id="password" type="password" placeholder="密码" autocomplete="current-password">
-        <label class="input-label" for="password">密码</label>
+
+      <!-- Login Panel -->
+      <div id="auth-login">
+        <div class="input-group">
+          <input id="login-account" type="text" placeholder="账号" autocomplete="username">
+          <label class="input-label" for="login-account">账号</label>
+        </div>
+        <div class="input-group">
+          <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
+          <label class="input-label" for="login-password">密码</label>
+        </div>
+        <div class="btn-group">
+          <button onclick="doLogin()" id="login-btn" class="btn-primary">登录</button>
+        </div>
       </div>
-      <div class="btn-group">
-        <button onclick="doLogin()" id="login-btn" class="btn-primary">登录</button>
-        <button onclick="doRegister()" id="register-btn" class="btn-secondary">注册</button>
+
+      <!-- Register Panel -->
+      <div id="auth-register" style="display:none">
+        <div class="input-group">
+          <input id="reg-account" type="text" placeholder="账号（字母和数字）" autocomplete="username">
+          <label class="input-label" for="reg-account">账号</label>
+        </div>
+        <div class="input-group">
+          <input id="reg-display-name" type="text" placeholder="显示名称">
+          <label class="input-label" for="reg-display-name">显示名称</label>
+        </div>
+        <div class="input-group">
+          <input id="reg-password" type="password" placeholder="密码（至少6位）" autocomplete="new-password">
+          <label class="input-label" for="reg-password">密码</label>
+        </div>
+        <div class="btn-group">
+          <button onclick="doRegister()" id="register-btn" class="btn-primary">注册</button>
+        </div>
       </div>
+
       <p id="auth-msg"></p>
     </div>
   </div>

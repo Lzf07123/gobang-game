@@ -31,8 +31,13 @@ class GameEngine:
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._init()
+            instance = super().__new__(cls)
+            try:
+                instance._init()
+            except Exception:
+                cls._instance = None
+                raise
+            cls._instance = instance
         return cls._instance
 
     def _init(self):
@@ -69,7 +74,27 @@ class GameEngine:
         self.lib.get_win_line_on.argtypes = [_board_t, ctypes.c_int, ctypes.c_int, _win_t, _win_t]
         self.lib.get_win_line_on.restype = ctypes.c_int
 
+        # rules.h — forbidden-move detection (operates on static board; call
+        # set_board_state first to sync the room's board before checking)
+        self.lib.check_forbidden.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.check_forbidden.restype = ctypes.c_int
+        self.lib.is_over_line.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.is_over_line.restype = ctypes.c_int
+        self.lib.is_double_three.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.is_double_three.restype = ctypes.c_int
+        self.lib.is_double_four.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.is_double_four.restype = ctypes.c_int
+
         self.lib.board_init()
+
+    def _sync_board(self, board):
+        """Copy a per-room board to the static C board for functions that need it."""
+        self.lib.set_board_state(board)
+
+    def check_forbidden(self, board, x, y):
+        """Check forbidden move for black at (x,y) on a per-room board."""
+        self._sync_board(board)
+        return self.lib.check_forbidden(x, y)
 
     def check_winner_on(self, board, x, y):
         """Check win at (x,y) on a caller-owned ctypes board. Returns color or 0."""
@@ -105,3 +130,9 @@ def check_winner_on_board(board, x, y):
     if color:
         return color, engine.get_win_line_on(board, x, y)
     return 0, None
+
+
+def check_forbidden_on_board(board, x, y):
+    """Check forbidden move for black at (x,y). Returns FORBID_* constant."""
+    engine = get_engine()
+    return engine.check_forbidden(board, x, y)

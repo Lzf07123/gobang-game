@@ -1,7 +1,6 @@
 #include "evaluate.h"
 #include "board.h"
-
-static int dirs[4][2] = {{1,0}, {0,1}, {1,1}, {1,-1}};
+#include "rules.h"
 
 /* Scan consecutive stones from (x,y) in direction (dx,dy) up to 5 steps. */
 static int scan_dir(int x, int y, int dx, int dy, int color) {
@@ -17,6 +16,9 @@ static int scan_dir(int x, int y, int dx, int dy, int color) {
 
 /* Evaluate the strength of placing `color` at (x,y).
    Returns a heuristic score (higher = better). */
+/* Deprecated: operates on the static board via get_cell(). These functions are
+   only valid when the static board is synced (e.g., for AI evaluation via the
+   Python wrapper calling set_board_state() first). */
 int evaluate_position(int x, int y, int color) {
     if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return -1;
     if (get_cell(x, y) != EMPTY) return -1;

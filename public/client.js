@@ -20,6 +20,7 @@ let matching = false;  // currently in matchmaking queue
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let kickedOut = false;
+let pendingMessages = [];  // queued messages to send after auth_ok
 const MAX_RECONNECT = 8;
 
 // Game records for replay
@@ -235,8 +236,15 @@ function setLoading(btn, loading) {
 async function apiPost(path, body) {
   const resp = await fetch(`${httpBase}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify(body),
+  });
+  return await resp.json();
+}
+
+async function apiGet(path) {
+  const resp = await fetch(`${httpBase}${path}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
   });
   return await resp.json();
 }
@@ -355,6 +363,10 @@ function handleMessage(data) {
       setStatus('已连接，准备就绪');
       resetGameState();
       drawBoard();
+      // Flush any queued messages
+      while (pendingMessages.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(pendingMessages.shift());
+      }
       break;
 
     case 'waiting':
@@ -463,7 +475,7 @@ function handleMessage(data) {
     case 'error':
       if (data.error && (data.error.includes('Token') || data.error.includes('认证'))) {
         localStorage.removeItem('goban_token');
-        localStorage.removeItem('goban_username');
+        localStorage.removeItem('goban_account');
         showAuthArea();
         return;
       }
@@ -565,11 +577,21 @@ function handleMessage(data) {
   }
 }
 
+function sendOrQueue(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(msg);
+  } else {
+    pendingMessages.push(msg);
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      connectWS();
+    }
+  }
+}
+
 // ===== Room System =====
 function createRoom() {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connectWS();
-    setTimeout(() => ws.send(JSON.stringify({ type: 'create_room' })), 500);
+    sendOrQueue(JSON.stringify({ type: 'create_room' }));
     return;
   }
   ws.send(JSON.stringify({ type: 'create_room' }));
@@ -586,8 +608,7 @@ function joinRoom() {
     return;
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connectWS();
-    setTimeout(() => ws.send(JSON.stringify({ type: 'join_room', room_id: code })), 500);
+    sendOrQueue(JSON.stringify({ type: 'join_room', room_id: code }));
     return;
   }
   ws.send(JSON.stringify({ type: 'join_room', room_id: code }));
@@ -603,8 +624,7 @@ function spectateRoom() {
     return;
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connectWS();
-    setTimeout(() => ws.send(JSON.stringify({ type: 'join_room', room_id: code, as_spectator: true })), 500);
+    sendOrQueue(JSON.stringify({ type: 'join_room', room_id: code, as_spectator: true }));
     return;
   }
   ws.send(JSON.stringify({ type: 'join_room', room_id: code, as_spectator: true }));
@@ -725,8 +745,7 @@ function startMatch() {
   }
 
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connectWS();
-    setTimeout(() => ws.send(JSON.stringify({ type: 'match' })), 500);
+    sendOrQueue(JSON.stringify({ type: 'match' }));
     return;
   }
   ws.send(JSON.stringify({ type: 'match' }));
@@ -778,8 +797,7 @@ async function toggleProfile() {
     document.getElementById('profile-name-input').value = displayName;
     document.querySelector('.profile-edit-name').style.display = 'none';
     try {
-      const resp = await fetch(`${httpBase}/api/profile?account=${encodeURIComponent(username)}`);
-      const data = await resp.json();
+      const data = await apiGet(`/api/profile?account=${encodeURIComponent(username)}`);
       document.getElementById('stat-total').textContent = data.total_games || 0;
       document.getElementById('stat-wins').textContent = data.wins || 0;
       const rate = data.total_games > 0 ? Math.round((data.wins / data.total_games) * 100) + '%' : '-';
@@ -814,12 +832,7 @@ async function saveDisplayName() {
     return;
   }
   try {
-    const resp = await fetch(`${httpBase}/api/profile/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: username, display_name: newName }),
-    });
-    const data = await resp.json();
+    const data = await apiPost('/api/profile/update', { display_name: newName });
     if (data.success) {
       displayName = newName;
       localStorage.setItem('goban_display_name', displayName);
@@ -899,24 +912,36 @@ function showRoomBrowserOverlay() {
       const isPlaying = r.state === 'playing';
       const el = document.createElement('div');
       el.className = 'room-browser-item';
+
+      const codeSpan = document.createElement('span');
+      codeSpan.className = 'room-browser-code';
+      codeSpan.textContent = r.room_id;
+
       const playerStr = (r.players || [r.creator]).join(' vs ');
-      const stateBadge = isPlaying
-        ? '<span class="room-browser-badge playing">对战中</span>'
-        : '<span class="room-browser-badge waiting">等待中</span>';
-      const specInfo = r.spectator_count > 0
-        ? `<span class="room-browser-spec">👁 ${r.spectator_count}</span>` : '';
-      const actionBtn = isPlaying
-        ? `<button class="btn-small room-browser-spectate" data-room="${r.room_id}">观战</button>`
-        : `<button class="btn-small room-browser-join" data-room="${r.room_id}">加入</button>`;
-      el.innerHTML = `
-        <span class="room-browser-code">${r.room_id}</span>
-        <span class="room-browser-creator" title="${playerStr}">${playerStr}</span>
-        ${stateBadge}
-        ${specInfo}
-        ${actionBtn}
-      `;
-      const btn = isPlaying ? el.querySelector('.room-browser-spectate') : el.querySelector('.room-browser-join');
-      btn.onclick = () => {
+      const creatorSpan = document.createElement('span');
+      creatorSpan.className = 'room-browser-creator';
+      creatorSpan.title = playerStr;
+      creatorSpan.textContent = playerStr;
+
+      const badge = document.createElement('span');
+      badge.className = 'room-browser-badge ' + (isPlaying ? 'playing' : 'waiting');
+      badge.textContent = isPlaying ? '对战中' : '等待中';
+
+      el.appendChild(codeSpan);
+      el.appendChild(creatorSpan);
+      el.appendChild(badge);
+
+      if (r.spectator_count > 0) {
+        const specSpan = document.createElement('span');
+        specSpan.className = 'room-browser-spec';
+        specSpan.textContent = '👁 ' + r.spectator_count;
+        el.appendChild(specSpan);
+      }
+
+      const actionBtn = document.createElement('button');
+      actionBtn.className = 'btn-small ' + (isPlaying ? 'room-browser-spectate' : 'room-browser-join');
+      actionBtn.textContent = isPlaying ? '观战' : '加入';
+      actionBtn.onclick = () => {
         if (isPlaying) {
           document.getElementById('spectate-code-input').value = r.room_id;
           hideRoomBrowser();
@@ -927,6 +952,8 @@ function showRoomBrowserOverlay() {
           joinRoom();
         }
       };
+      el.appendChild(actionBtn);
+
       list.appendChild(el);
     });
   }
@@ -960,8 +987,8 @@ function appendChatMessage(user, msg) {
   el.className = 'chat-msg';
   if (user === '系统') el.className += ' system';
   el.innerHTML = user === '系统'
-    ? `<span class="chat-system">${msg}</span>`
-    : `<span class="chat-user">${user}:</span> <span class="chat-text">${escapeHtml(msg)}</span>`;
+    ? `<span class="chat-system">${escapeHtml(msg)}</span>`
+    : `<span class="chat-user">${escapeHtml(user)}:</span> <span class="chat-text">${escapeHtml(msg)}</span>`;
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
 }
@@ -1017,8 +1044,7 @@ async function showReplayList() {
 
   let serverGames = [];
   try {
-    const resp = await fetch(`${httpBase}/api/games?username=${encodeURIComponent(username)}`);
-    const data = await resp.json();
+    const data = await apiGet(`/api/games?username=${encodeURIComponent(username)}`);
     serverGames = data.games || [];
   } catch(e) { /* fallback to localStorage */ }
 
@@ -1034,11 +1060,22 @@ async function showReplayList() {
         el.className = 'replay-item';
         const date = new Date(rec.date);
         const dateStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
-        el.innerHTML = `
-          <span class="replay-info">${dateStr} vs ${rec.opponent}</span>
-          <span class="replay-result">${rec.result}</span>
-          <button onclick="startReplayLocal(${idx})">回放</button>
-        `;
+
+        const infoSpan = document.createElement('span');
+        infoSpan.className = 'replay-info';
+        infoSpan.textContent = `${dateStr} vs ${rec.opponent}`;
+
+        const resultSpan = document.createElement('span');
+        resultSpan.className = 'replay-result';
+        resultSpan.textContent = rec.result;
+
+        const btn = document.createElement('button');
+        btn.textContent = '回放';
+        btn.onclick = () => { hideReplayList(); startReplayLocal(idx); };
+
+        el.appendChild(infoSpan);
+        el.appendChild(resultSpan);
+        el.appendChild(btn);
         list.appendChild(el);
       });
     }
@@ -1052,11 +1089,22 @@ async function showReplayList() {
     const opp = g.black_username === username ? g.white_username : g.black_username;
     const date = new Date(g.created_at);
     const dateStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
-    el.innerHTML = `
-      <span class="replay-info">${dateStr} vs ${opp || '未知'}</span>
-      <span class="replay-result">${g.winner}</span>
-      <button onclick="startReplayServer(${g.id})">回放</button>
-    `;
+
+    const infoSpan = document.createElement('span');
+    infoSpan.className = 'replay-info';
+    infoSpan.textContent = `${dateStr} vs ${opp || '未知'}`;
+
+    const resultSpan = document.createElement('span');
+    resultSpan.className = 'replay-result';
+    resultSpan.textContent = g.winner;
+
+    const btn = document.createElement('button');
+    btn.textContent = '回放';
+    btn.onclick = () => { hideReplayList(); startReplayServer(g.id); };
+
+    el.appendChild(infoSpan);
+    el.appendChild(resultSpan);
+    el.appendChild(btn);
     list.appendChild(el);
   });
 }
@@ -1088,8 +1136,7 @@ async function startReplayServer(gameId) {
   document.getElementById('replay-list').style.display = 'none';
   let moves = [];
   try {
-    const resp = await fetch(`${httpBase}/api/games/${gameId}`);
-    const data = await resp.json();
+    const data = await apiGet(`/api/games/${gameId}`);
     moves = (data.moves || []).map(m => ({ x: m.x, y: m.y, color: m.color }));
   } catch(e) {
     setStatus('加载对局失败');
@@ -1392,6 +1439,10 @@ function resetGameState() {
   myColor = 0;
   myTurn = false;
   isSpectator = false;
+  roomId = '';
+  replayMode = false;
+  replayMoves = [];
+  replayIndex = -1;
   lastMove = null;
   timerRemaining = 0;
   roomPlayers = [];
@@ -1403,11 +1454,13 @@ function resetGameState() {
   document.getElementById('game-actions').style.display = 'none';
   document.getElementById('rematch-actions').style.display = 'none';
   document.getElementById('undo-overlay').style.display = 'none';
+  document.getElementById('replay-controls').style.display = 'none';
   board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
   winLine = null;
   currentMoves = [];
   chatMessages = [];
   document.getElementById('chat-messages').innerHTML = '';
+  pendingMessages = [];
 }
 
 // ===== Canvas Sizing (Responsive) =====
