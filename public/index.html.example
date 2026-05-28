@@ -85,11 +85,20 @@
       <div class="profile-content">
         <div class="profile-avatar-large"></div>
         <div class="profile-name"></div>
+        <div class="profile-edit-name" style="display:none">
+          <input id="profile-name-input" type="text" placeholder="新用户名" maxlength="20" class="code-input" style="width:100%;margin-bottom:0.4rem;">
+          <div class="btn-group">
+            <button onclick="saveDisplayName()" class="btn-primary btn-small">保存</button>
+            <button onclick="cancelEditName()" class="btn-small">取消</button>
+          </div>
+          <p id="profile-name-msg" style="font-size:0.8rem;margin-top:0.3rem;"></p>
+        </div>
         <div class="profile-stats">
           <div class="profile-stat"><span class="stat-label">总对局</span><span class="stat-value" id="stat-total">0</span></div>
           <div class="profile-stat"><span class="stat-label">胜场</span><span class="stat-value" id="stat-wins">0</span></div>
           <div class="profile-stat"><span class="stat-label">胜率</span><span class="stat-value" id="stat-rate">-</span></div>
         </div>
+        <button class="btn-secondary btn-small" onclick="startEditName()">修改用户名</button>
         <button class="btn-secondary btn-small" onclick="doLogout()">退出登录</button>
       </div>
     </div>
@@ -172,6 +181,12 @@
 <div id="replay-controls" class="replay-bar" style="display:none">
   <button onclick="exitReplay()" class="btn-small">退出回放</button>
   <button onclick="replayStep(false)" class="btn-small">◀ 上一步</button>
+  <button id="replay-auto-btn" onclick="toggleAutoPlay()" class="btn-small">▶ 自动</button>
+  <select id="replay-speed" onchange="changeReplaySpeed()" class="btn-small" style="flex:none;width:auto;padding:0.3rem 0.4rem;">
+    <option value="1">1x</option>
+    <option value="0.5" selected>0.5x</option>
+    <option value="0.25">0.25x</option>
+  </select>
   <span id="replay-info">回放中</span>
   <button onclick="replayStep(true)" class="btn-small">下一步 ▶</button>
 </div>
@@ -206,6 +221,26 @@
       <button onclick="hideRoomBrowser()" class="btn-small">✕</button>
     </div>
     <div class="room-browser-items"></div>
+  </div>
+</div>
+
+<!-- ===== Room Visibility Overlay ===== -->
+<div id="room-visibility-overlay" class="overlay" style="display:none">
+  <div class="overlay-content visibility-dialog">
+    <h3>选择房间类型</h3>
+    <div class="visibility-options">
+      <button onclick="confirmCreateRoom(true)" class="btn-primary visibility-btn">
+        <span class="visibility-icon">🌐</span>
+        <span class="visibility-label">公开房间</span>
+        <span class="visibility-desc">出现在浏览列表中，任何人可加入或观战</span>
+      </button>
+      <button onclick="confirmCreateRoom(false)" class="btn-secondary visibility-btn">
+        <span class="visibility-icon">🔒</span>
+        <span class="visibility-label">私人房间</span>
+        <span class="visibility-desc">仅通过房间码加入，不会出现在列表中</span>
+      </button>
+    </div>
+    <button onclick="cancelCreateRoom()" class="btn-small" style="margin-top:0.8rem;">取消</button>
   </div>
 </div>
 

@@ -1041,7 +1041,7 @@ body[data-theme="bamboo"]::before {
   transition: border-color 0.2s;
 }
 .visibility-btn:hover {
-  border-color: var(--accent);
+  border-color: #4ecdc4;
 }
 .visibility-icon {
   font-size: 1.5rem;
@@ -1057,3 +1057,4 @@ body[data-theme="bamboo"]::before {
 .room-browser-vis {
   font-size: 0.75rem;
   margin-left: auto;
+}

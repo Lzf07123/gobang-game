@@ -291,6 +291,8 @@ async def handle_list_rooms(request):
     room_list = []
     for room_id, room in rooms.items():
         if room['state'] in ('waiting', 'playing') and room['players'][0]:
+            if not room.get('is_public', False):
+                continue
             spectators = len(room.get('spectators', set()))
             room_list.append({
                 'room_id': room_id,
@@ -494,7 +496,7 @@ async def _handle_auth(ws, token):
     # Look up display_name from database
     display_name = None
     try:
-        rows = await _run_db(execute_query, "SELECT display_name FROM users WHERE username = %s", (username,))
+        rows = await _run_db(execute_query, "SELECT display_name FROM users WHERE account = %s", (username,))
         if rows:
             display_name = rows[0]['display_name']
     except Exception:
@@ -546,8 +548,7 @@ async def _handle_auth(ws, token):
     if old_ws and old_ws != ws:
         clients.pop(old_ws, None)
         # Replace old ws references in waiting_queue
-        if old_ws in waiting_queue:
-            del waiting_queue[old_ws]
+        if waiting_queue.pop(old_ws, None) is not None:
             waiting_queue[ws] = True
         if transferred_room_id and transferred_room_id in rooms:
             room = rooms[transferred_room_id]
@@ -629,7 +630,7 @@ async def _handle_match(ws):
         opponent = None
         for candidate in list(waiting_queue.keys()):
             if candidate != ws and candidate in clients:
-                del waiting_queue[candidate]
+                waiting_queue.pop(candidate, None)
                 opponent = candidate
                 break
             # Candidate is stale — clean it up
@@ -1336,7 +1337,7 @@ async def _periodic_cleanup(app):
             # Clean empty waiting queue entries (disconnected clients)
             stale_queue = [ws for ws in waiting_queue if ws not in clients]
             for ws in stale_queue:
-                del waiting_queue[ws]
+                waiting_queue.pop(ws, None)
 
             # Clean WS rate-limit entries for disconnected clients
             stale_ws = [ws_id for ws_id in list(_ws_ratelimit.keys())
@@ -1364,8 +1365,8 @@ async def _on_disconnect(ws):
         pending_auth.pop(ws, None)
         return
 
-    if ws in waiting_queue:
-        del waiting_queue[ws]
+    waiting_queue.pop(ws, None)
+    _ws_ratelimit.pop(id(ws), None)
 
     if ws not in clients:
         return
