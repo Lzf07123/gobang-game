@@ -17,7 +17,6 @@ body::before {
   content: '';
   position: fixed;
   inset: 0;
-  pointer-events: none;
   background: linear-gradient(-45deg, #1a1a2e, #16213e, #0f3460, #1a1a2e);
   background-size: 400% 400%;
   animation: bgShift 15s ease infinite;
@@ -35,7 +34,6 @@ body::after {
   content: '';
   position: fixed;
   inset: 0;
-  pointer-events: none;
   background-image:
     linear-gradient(rgba(78, 205, 196, 0.04) 1px, transparent 1px),
     linear-gradient(90deg, rgba(78, 205, 196, 0.04) 1px, transparent 1px);
@@ -43,11 +41,7 @@ body::after {
   z-index: -1;
 }
 
-#app {
-  text-align: center;
-  position: relative;
-  z-index: 0;
-}
+#app { text-align: center; }
 
 /* ===== Auth ===== */
 #auth-area {
@@ -735,8 +729,8 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   }
 
   #canvas {
-    width: min(95vw, 100dvh - 220px);
-    height: min(95vw, 100dvh - 220px);
+    width: min(95vw, 100vh - 280px);
+    height: min(95vw, 100vh - 280px);
   }
 
   .game-header {
@@ -823,8 +817,8 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 /* Landscape phone warning */
 @media (max-height: 500px) and (orientation: landscape) {
   #canvas {
-    width: min(80dvh, 380px);
-    height: min(80dvh, 380px);
+    width: min(80vh, 380px);
+    height: min(80vh, 380px);
   }
 
   .game-layout {
