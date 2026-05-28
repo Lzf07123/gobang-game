@@ -17,17 +17,23 @@ let lastMove = null;  // {x, y}
 let winLine = null;   // [{x, y}, ...] 5 winning coordinates
 let chatMessages = [];
 let timerRemaining = 0;
-let timerInterval = null;
+let autoPlayInterval = null;
+let replaySpeed = 0.5;   // seconds per step in auto-play
 let matching = false;  // currently in matchmaking queue
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let kickedOut = false;
 let pendingMessages = [];  // queued messages to send after auth_ok
+let _glowAnimId = null;   // win-line glow animation handle
 let autoLoginPending = false;  // true during init() auto-login, cleared on auth_ok or auth error
 const MAX_RECONNECT = 8;
 
 // Game records for replay
-let gameRecords = JSON.parse(localStorage.getItem('goban_records') || '[]');
+function _loadJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || fallback); }
+  catch (e) { console.error('Failed to parse ' + key + ':', e); return JSON.parse(fallback); }
+}
+let gameRecords = _loadJSON('goban_records', '[]');
 let currentMoves = [];  // moves of current game
 let replayMode = false;
 let replayMoves = [];
@@ -274,6 +280,7 @@ function showGameArea(user) {
   document.getElementById('username-display').textContent = name;
   document.getElementById('avatar').textContent = name.charAt(0).toUpperCase();
   document.getElementById('logout-btn').style.display = '';
+  resizeCanvas();
   setStatus(`欢迎，${name}`);
 }
 
@@ -286,6 +293,8 @@ function showAuthArea() {
   document.getElementById('cancel-match-btn').style.display = 'none';
   document.getElementById('logout-btn').style.display = 'none';
   document.getElementById('profile-panel').style.display = 'none';
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (roomBrowserInterval) { clearInterval(roomBrowserInterval); roomBrowserInterval = null; }
   if (ws) {
     ws.onclose = null;
     ws.close();
@@ -325,7 +334,13 @@ function connectWS() {
     reconnectAttempts = 0;
     ws.send(JSON.stringify({ type: 'auth', token }));
   };
-  ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+  ws.onmessage = (e) => {
+    try {
+      handleMessage(JSON.parse(e.data));
+    } catch (err) {
+      console.error('[ws] failed to parse message:', err);
+    }
+  };
   ws.onclose = (e) => {
     console.log('[ws] closed code=' + e.code + ' reason=' + (e.reason || 'none') + ' wasClean=' + e.wasClean);
     ws = null;
@@ -400,10 +415,14 @@ function handleMessage(data) {
       document.getElementById('username-display').textContent = displayName || username;
       document.getElementById('avatar').textContent = (displayName || username).charAt(0).toUpperCase();
       setStatus('已连接，准备就绪');
-      // Flush any queued messages BEFORE resetGameState (which clears the queue)
+      // On reconnection from an active game, preserve local state — the
+      // server will re-sync room details.  Only reset on a fresh session.
+      const reconnecting = gameStarted || !!roomId;
       const queued = pendingMessages.splice(0);
-      resetGameState();
-      drawBoard();
+      if (!reconnecting) {
+        resetGameState();
+        drawBoard();
+      }
       for (const msg of queued) {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(msg);
@@ -424,6 +443,7 @@ function handleMessage(data) {
     case 'start':
       gameStarted = true;
       matching = false;
+      reconnectAttempts = 0;
       myColor = data.color;
       myTurn = (myColor === 1);
       isSpectator = false;
@@ -431,7 +451,7 @@ function handleMessage(data) {
       if (data.usernames) roomPlayers = data.usernames;
       board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
       lastMove = null;
-      winLine = null;
+      _stopGlowAnim(); winLine = null;
       currentMoves = [];
       setStatus(data.message);
       document.getElementById('match-btn').disabled = true;
@@ -453,6 +473,10 @@ function handleMessage(data) {
       break;
 
     case 'move':
+      if (data.x < 0 || data.x >= SIZE || data.y < 0 || data.y >= SIZE) {
+        console.error('[ws] move with out-of-bounds coordinates:', data.x, data.y);
+        break;
+      }
       board[data.y][data.x] = data.color;
       lastMove = {x: data.x, y: data.y};
       if (!isSpectator) {
@@ -467,6 +491,7 @@ function handleMessage(data) {
       gameStarted = false;
       matching = false;
       winLine = data.win_line || null;
+      if (winLine) _startGlowAnim();
       document.getElementById('cancel-match-btn').style.display = 'none';
       document.getElementById('game-actions').style.display = 'none';
       stopTimer();
@@ -525,16 +550,27 @@ function handleMessage(data) {
       }
       console.log('[error]', data.error);
       setStatus(`错误：${data.error}`);
+      // Re-enable UI if not in a room/game (covers failed room creation/join/match)
+      if (!roomId && !gameStarted) {
+        matching = false;
+        document.getElementById('match-btn').disabled = false;
+        document.getElementById('match-btn').textContent = '开始匹配';
+        document.getElementById('create-room-btn').disabled = false;
+        document.getElementById('room-controls').style.display = '';
+        document.getElementById('cancel-match-btn').style.display = 'none';
+      }
       break;
 
     // Room system messages
     case 'room_created':
       roomId = data.room_id;
+      reconnectAttempts = 0;
       showRoomInfo();
       break;
 
     case 'room_joined':
       roomId = data.room_id;
+      reconnectAttempts = 0;
       isSpectator = data.as_spectator || false;
       roomPlayers = data.players || [];
       spectatorCount = data.spectator_count || 0;
@@ -627,7 +663,7 @@ function sendOrQueue(msg) {
     ws.send(msg);
   } else {
     pendingMessages.push(msg);
-    if (!ws || ws.readyState === WebSocket.CLOSED) {
+    if (!ws || ws.readyState >= WebSocket.CLOSING) {
       connectWS();
     }
   }
@@ -911,6 +947,9 @@ function doLogout() {
   localStorage.removeItem('goban_account');
   localStorage.removeItem('goban_display_name');
   document.getElementById('profile-panel').style.display = 'none';
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (roomBrowserInterval) { clearInterval(roomBrowserInterval); roomBrowserInterval = null; }
+  _stopGlowAnim();
   if (ws) {
     ws.onclose = null;
     ws.close();
@@ -937,9 +976,14 @@ function cancelMatch() {
 let roomBrowserInterval = null;
 let roomBrowserRooms = [];
 
+let _browsingRooms = false;
+let _replayGen = 0;
+
 async function browseRooms() {
-  if (!roomBrowserInterval) {
+  if (!roomBrowserInterval && !_browsingRooms) {
+    _browsingRooms = true;
     await fetchAndShowRooms();
+    _browsingRooms = false;
     roomBrowserInterval = setInterval(fetchAndShowRooms, 5000);
   }
 }
@@ -1028,6 +1072,7 @@ function hideRoomBrowser() {
     clearInterval(roomBrowserInterval);
     roomBrowserInterval = null;
   }
+  _browsingRooms = false;
 }
 function sendChat() {
   const input = document.getElementById('chat-input');
@@ -1081,7 +1126,7 @@ function stopTimer() {
 
 // ===== Game Records (Replay) =====
 function saveGameRecord(opponent, result, moves) {
-  const records = JSON.parse(localStorage.getItem('goban_records') || '[]');
+  const records = _loadJSON('goban_records', '[]');
   records.unshift({
     id: Date.now(),
     date: new Date().toISOString(),
@@ -1112,7 +1157,7 @@ async function showReplayList() {
 
   if (serverGames.length === 0) {
     // Fallback to localStorage
-    const records = JSON.parse(localStorage.getItem('goban_records') || '[]');
+    const records = _loadJSON('goban_records', '[]');
     list.innerHTML = '';
     if (records.length === 0) {
       list.innerHTML = '<div class="replay-empty">暂无对局记录</div>';
@@ -1176,12 +1221,18 @@ function hideReplayList() {
 }
 
 function startReplayLocal(idx) {
-  const records = JSON.parse(localStorage.getItem('goban_records') || '[]');
+  const records = _loadJSON('goban_records', '[]');
   if (!records[idx]) return;
   const rec = records[idx];
   replayMoves = rec.moves;
   replayIndex = -1;
   replayMode = true;
+  gameStarted = false;
+  myTurn = false;
+  _stopGlowAnim(); winLine = null;
+  roomId = '';
+  roomPlayers = [];
+  isSpectator = false;
   document.getElementById('replay-list').style.display = 'none';
 
   document.getElementById('replay-controls').style.display = '';
@@ -1195,12 +1246,15 @@ function startReplayLocal(idx) {
 }
 
 async function startReplayServer(gameId) {
+  const gen = ++_replayGen;
   document.getElementById('replay-list').style.display = 'none';
   let moves = [];
   try {
     const data = await apiGet(`/api/games/${gameId}`);
+    if (gen !== _replayGen) return;
     moves = (data.moves || []).map(m => ({ x: m.x, y: m.y, color: m.color }));
   } catch(e) {
+    if (gen !== _replayGen) return;
     setStatus('加载对局失败');
     return;
   }
@@ -1213,6 +1267,12 @@ async function startReplayServer(gameId) {
   replayMoves = moves;
   replayIndex = -1;
   replayMode = true;
+  gameStarted = false;
+  myTurn = false;
+  _stopGlowAnim(); winLine = null;
+  roomId = '';
+  roomPlayers = [];
+  isSpectator = false;
 
   document.getElementById('replay-controls').style.display = '';
   document.getElementById('match-btn').disabled = true;
@@ -1257,6 +1317,8 @@ function replayStep(forward) {
 }
 
 function exitReplay() {
+  stopAutoPlay();
+  _replayGen++;
   replayMode = false;
   replayMoves = [];
   replayIndex = -1;
@@ -1268,6 +1330,46 @@ function exitReplay() {
   resetGameState();
   drawBoard();
   setStatus('已退出回放');
+}
+
+function toggleAutoPlay() {
+  if (autoPlayInterval) {
+    stopAutoPlay();
+    return;
+  }
+  if (replayIndex >= replayMoves.length - 1) {
+    replayIndex = -1;
+    board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
+    lastMove = null;
+    drawBoard();
+  }
+  const btn = document.getElementById('replay-auto-btn');
+  if (btn) btn.textContent = '⏸ 停止';
+  autoPlayInterval = setInterval(() => {
+    if (!replayMode || replayIndex >= replayMoves.length - 1) {
+      stopAutoPlay();
+      return;
+    }
+    replayStep(true);
+  }, replaySpeed * 1000);
+}
+
+function stopAutoPlay() {
+  if (autoPlayInterval) {
+    clearInterval(autoPlayInterval);
+    autoPlayInterval = null;
+  }
+  const btn = document.getElementById('replay-auto-btn');
+  if (btn) btn.textContent = '▶ 自动';
+}
+
+function changeReplaySpeed() {
+  const sel = document.getElementById('replay-speed');
+  replaySpeed = parseFloat(sel.value) || 0.5;
+  if (autoPlayInterval) {
+    stopAutoPlay();
+    toggleAutoPlay();
+  }
 }
 
 // ===== Board Drawing =====
@@ -1412,7 +1514,21 @@ function drawWinLineHighlight(points, theme) {
     ctx.lineWidth = lw2;
     ctx.stroke();
   }
-  if (winLine) requestAnimationFrame(() => drawBoard());
+  // Glow animates via a standalone loop; see _startGlowAnim / _stopGlowAnim
+}
+
+function _startGlowAnim() {
+  if (_glowAnimId) return;
+  function frame() {
+    if (!winLine) { _glowAnimId = null; return; }
+    drawBoard();
+    _glowAnimId = requestAnimationFrame(frame);
+  }
+  _glowAnimId = requestAnimationFrame(frame);
+}
+
+function _stopGlowAnim() {
+  if (_glowAnimId) { cancelAnimationFrame(_glowAnimId); _glowAnimId = null; }
 }
 
 function animatePiece(x, y, color) {
@@ -1460,7 +1576,7 @@ function handleCanvasInput(clientX, clientY) {
   const snapRadius = CELL * 0.48;  // slightly less than half-cell for better UX
   if (bestDist > snapRadius * snapRadius || board[by][bx] !== 0) return;
 
-  ws.send(JSON.stringify({ type: 'move', x: bx, y: by }));
+  sendOrQueue(JSON.stringify({ type: 'move', x: bx, y: by }));
   myTurn = false;
   setStatus('等待对手落子...');
 }
@@ -1514,7 +1630,7 @@ function resetGameState() {
   document.getElementById('undo-overlay').style.display = 'none';
   document.getElementById('replay-controls').style.display = 'none';
   board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
-  winLine = null;
+  _stopGlowAnim(); winLine = null;
   currentMoves = [];
   chatMessages = [];
   document.getElementById('chat-messages').innerHTML = '';

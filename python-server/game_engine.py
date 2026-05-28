@@ -1,5 +1,6 @@
 import ctypes
 import os
+import asyncio
 
 BOARD_SIZE = 15
 EMPTY = 0
@@ -87,14 +88,21 @@ class GameEngine:
 
         self.lib.board_init()
 
+        self._lock = asyncio.Lock()
+
     def _sync_board(self, board):
         """Copy a per-room board to the static C board for functions that need it."""
         self.lib.set_board_state(board)
 
-    def check_forbidden(self, board, x, y):
-        """Check forbidden move for black at (x,y) on a per-room board."""
-        self._sync_board(board)
-        return self.lib.check_forbidden(x, y)
+    async def check_forbidden(self, board, x, y):
+        """Check forbidden move for black at (x,y) on a per-room board.
+
+        Protected by an asyncio lock to prevent concurrent _sync_board calls
+        from overwriting the C library's global static board mid-check.
+        """
+        async with self._lock:
+            self._sync_board(board)
+            return self.lib.check_forbidden(x, y)
 
     def check_winner_on(self, board, x, y):
         """Check win at (x,y) on a caller-owned ctypes board. Returns color or 0."""
@@ -132,7 +140,7 @@ def check_winner_on_board(board, x, y):
     return 0, None
 
 
-def check_forbidden_on_board(board, x, y):
+async def check_forbidden_on_board(board, x, y):
     """Check forbidden move for black at (x,y). Returns FORBID_* constant."""
     engine = get_engine()
-    return engine.check_forbidden(board, x, y)
+    return await engine.check_forbidden(board, x, y)

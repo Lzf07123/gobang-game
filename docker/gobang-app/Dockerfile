@@ -1,4 +1,4 @@
-FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/python:3.13.13 AS runner
+FROM python:3.13.13 AS runner
 
 WORKDIR /app
 COPY ./public/ .

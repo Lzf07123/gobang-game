@@ -275,7 +275,8 @@ def execute_query(sql, params=None, fetch=True):
     """
     with _DB() as (conn, cursor):
         cursor.execute(sql, params)
-        if sql.strip().upper().startswith('SELECT'):
+        stripped = sql.strip().upper()
+        if stripped.startswith('SELECT') or stripped.startswith('WITH') or stripped.startswith('SHOW'):
             return cursor.fetchall()
         conn.commit()
         return None

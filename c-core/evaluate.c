@@ -37,7 +37,7 @@ int evaluate_position(int x, int y, int color) {
         int open_ends = pos_open + neg_open;
 
         /* Score based on consecutive count and open ends */
-        if (total >= 5) score += 100000;
+        if (total >= 5 && (color == WHITE || total == 5)) score += 100000;
         else if (total == 4 && open_ends == 2) score += 10000;
         else if (total == 4 && open_ends == 1) score += 1000;
         else if (total == 3 && open_ends == 2) score += 1000;

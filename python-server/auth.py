@@ -46,11 +46,10 @@ def _load_jwt_secret():
         pass
 
     # Neither source provided a valid secret — refuse to start
-    secret = secrets.token_hex(32)
     print("=" * 60)
-    print("错误: JWT_SECRET 未设置或使用默认值！")
-    print("请将以下密钥写入 python-server/.env 中的 JWT_SECRET= 后重启：")
-    print(f"JWT_SECRET={secret}")
+    print("错误: JWT_SECRET 未设置！")
+    print("请运行: python3 -c \"import secrets; print(secrets.token_hex(32))\"")
+    print("将生成的密钥写入 python-server/.env 文件: JWT_SECRET=<密钥>")
     print("=" * 60)
     sys.exit(1)
 

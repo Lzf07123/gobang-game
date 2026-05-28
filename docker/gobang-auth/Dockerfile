@@ -1,4 +1,4 @@
-FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/gcc:12.5.0-bookworm AS builder
+FROM gcc:12.5.0-bookworm AS builder
 
 WORKDIR /app
 COPY ./c-core/ ./c-core/
@@ -6,7 +6,7 @@ RUN cd c-core/ && \
     make clean && \
     make all
 
-FROM bffwjdfjzq3wikw5yl.xuanyuan.run/library/python:3.13.13 AS runner
+FROM python:3.13.13 AS runner
 
 WORKDIR /app
 COPY ./python-server/ ./python-server/

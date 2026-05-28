@@ -59,6 +59,9 @@ _disconnect_grace = {}  # (username, session_id) -> {'task': asyncio.Task, 'ws':
 _GRACE_PERIOD = 5  # seconds
 _cleanup_task = None  # periodic cleanup task
 
+# Lock protecting matchmaking wait_queue and room join slot assignment
+_match_lock = asyncio.Lock()
+
 AUTH_TIMEOUT = 10  # seconds to wait for auth message
 TIMER_SECONDS = 30  # seconds per move
 ROOM_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -81,10 +84,11 @@ def _check_ratelimit(ip):
 
 
 def _generate_room_id():
-    while True:
+    for _ in range(100):
         rid = ''.join(random.choices(ROOM_ID_CHARS, k=4))
         if rid not in rooms:
             return rid
+    raise RuntimeError("无法生成唯一房间ID，房间数可能已满")
 
 
 async def _run_db(fn, *args):
@@ -107,7 +111,7 @@ def _submit_db(fn, *args):
 async def _send(ws, data):
     try:
         await ws.send_json(data)
-    except (ConnectionResetError, ConnectionAbortedError):
+    except ConnectionError:
         pass
 
 
@@ -122,15 +126,18 @@ async def _broadcast_room(room_id, data, exclude=None):
     for s in room.get('spectators', set()):
         if s != exclude:
             targets.append(s)
-    for t in targets:
-        await _send(t, data)
+    if targets:
+        await asyncio.gather(*(_send(t, data) for t in targets), return_exceptions=True)
 
 
 async def _broadcast_to_player(room, player_idx, data):
-    """Send to a specific player in a room."""
+    """Send to a specific player in a room.  Exceptions are caught and logged."""
     ws = room['players'][player_idx]
     if ws:
-        await _send(ws, data)
+        try:
+            await _send(ws, data)
+        except Exception:
+            pass
 
 
 async def _start_timer(room_id):
@@ -167,11 +174,12 @@ async def _timer_loop(room_id):
         winner_username = room['usernames'][winner_idx] or ('白方' if winner_idx == 1 else '黑方')
         room['state'] = 'finished'
         room['_winner'] = winner_idx
+        # Persist BEFORE any await — the room may be cleaned up during broadcast
+        _save_game_record(room_id, winner_username, '对方超时')
         await _broadcast_room(room_id, {'type': 'game_over', 'winner': winner_username, 'reason': '对方超时'})
         await _broadcast_room(room_id, {'type': 'chat', 'username': '系统', 'message': f'{winner_username}获胜（对方超时）'})
-        _save_game_record(room_id, winner_username, '对方超时')
         _submit_db(delete_active_game, room_id)
-        _start_rematch_timer(room_id)
+        await _start_rematch_timer(room_id)
     except asyncio.CancelledError:
         pass
 
@@ -198,7 +206,7 @@ def _save_game_record(room_id, winner_username, reason):
 
 
 def _cleanup_room(room_id):
-    """Remove room and reset connected clients."""
+    """Remove room and reset connected clients. Idempotent — safe to call twice."""
     t = _timer_tasks.pop(room_id, None)
     if t:
         t.cancel()
@@ -206,21 +214,22 @@ def _cleanup_room(room_id):
     if t:
         t.cancel()
     room = rooms.pop(room_id, None)
+    if not room:
+        return
     _submit_db(delete_active_game, room_id)
-    if room:
-        # Notify spectators before cleanup (fire-and-forget, suppress task warnings)
-        for ws in room.get('spectators', set()):
-            t = asyncio.ensure_future(_send(ws, {'type': 'room_closed', 'message': '房间已关闭'}))
-            t.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-        for ws in room.get('players', []):
-            if ws:
-                info = clients.get(ws)
-                if info and info['room_id'] == room_id:
-                    info['room_id'] = None
-        for ws in room.get('spectators', set()):
+    # Notify spectators before cleanup (fire-and-forget, suppress task warnings)
+    for ws in room.get('spectators', set()):
+        t = asyncio.ensure_future(_send(ws, {'type': 'room_closed', 'message': '房间已关闭'}))
+        t.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+    for ws in room.get('players', []):
+        if ws:
             info = clients.get(ws)
             if info and info['room_id'] == room_id:
                 info['room_id'] = None
+    for ws in room.get('spectators', set()):
+        info = clients.get(ws)
+        if info and info['room_id'] == room_id:
+            info['room_id'] = None
 
 
 def _format_room_info(room_id, room):
@@ -515,6 +524,9 @@ async def _handle_auth(ws, token):
             logger.info(f"Auth session valid: {username} (matched db={db_session[:8] if db_session else '<none>'}...)")
         except Exception as e:
             logger.warning(f"Session validation DB error for {username}: {e}")
+            await _send(ws, {'type': 'error', 'error': '服务器内部错误，请稍后重连'})
+            await ws.close()
+            return
 
     # Look up display_name from database
     display_name = None
@@ -639,82 +651,91 @@ async def _handle_auth(ws, token):
 
 async def _handle_match(ws):
     info = clients.get(ws)
-    if not info or info['room_id']:
+    if not info:
         return
 
     if len(rooms) >= MAX_ROOMS:
         await _send(ws, {'type': 'error', 'error': '服务器繁忙，请稍后再试'})
         return
 
-    if waiting_queue:
-        # Find a valid opponent (skip disconnected clients)
-        opponent = None
-        for candidate in list(waiting_queue.keys()):
-            if candidate != ws and candidate in clients:
+    async with _match_lock:
+        # Re-check room_id under the lock — it may have been set
+        # by _handle_create_room/_handle_join_room before we acquired it.
+        if info['room_id']:
+            return
+        if waiting_queue:
+            # Find a valid opponent (skip disconnected clients)
+            opponent = None
+            for candidate in list(waiting_queue.keys()):
+                if candidate != ws and candidate in clients:
+                    waiting_queue.pop(candidate, None)
+                    opponent = candidate
+                    break
+                # Candidate is stale — clean it up
                 waiting_queue.pop(candidate, None)
-                opponent = candidate
-                break
-            # Candidate is stale — clean it up
-            waiting_queue.pop(candidate, None)
-        if not opponent:
+            if not opponent:
+                waiting_queue[ws] = True
+                await _send(ws, {'type': 'waiting', 'message': '等待对手...'})
+                return
+
+            o_info = clients.get(opponent)
+            if not o_info:
+                waiting_queue[ws] = True
+                await _send(ws, {'type': 'waiting', 'message': '等待对手...'})
+                return
+
+            # Create room for matched pair
+            room_id = _generate_room_id()
+            od = o_info.get('display_name', o_info['username'])
+            md = info.get('display_name', info['username'])
+            oa = o_info['username']
+            ma = info['username']
+            rooms[room_id] = {
+                'players': [opponent, ws],
+                'usernames': [od, md],
+                'accounts': [oa, ma],
+                'spectators': set(),
+                'board': make_board(),
+                'current_player': 1,
+                'moves': [],
+                'state': 'playing',
+                'creator': opponent,
+                'matchmade': True,
+                'is_public': False,
+                '_created_at': time.time(),
+            }
+            info['room_id'] = room_id
+            o_info['room_id'] = room_id
+
+        else:
             waiting_queue[ws] = True
             await _send(ws, {'type': 'waiting', 'message': '等待对手...'})
             return
 
-        o_info = clients.get(opponent)
-        if not o_info:
-            waiting_queue[ws] = True
-            await _send(ws, {'type': 'waiting', 'message': '等待对手...'})
-            return
-
-        # Create room for matched pair
-        room_id = _generate_room_id()
-        od = o_info.get('display_name', o_info['username'])
-        md = info.get('display_name', info['username'])
-        oa = o_info['username']
-        ma = info['username']
-        rooms[room_id] = {
-            'players': [opponent, ws],
-            'usernames': [od, md],
-            'accounts': [oa, ma],
-            'spectators': set(),
-            'board': make_board(),
-            'current_player': 1,
-            'moves': [],
-            'state': 'playing',
-            'creator': opponent,
-            'matchmade': True,
-            'is_public': False,
-            '_created_at': time.time(),
-        }
-        info['room_id'] = room_id
-        o_info['room_id'] = room_id
-
-        await _send(opponent, {
-            'type': 'start', 'color': 1,
-            'message': '您执黑（先手）',
-            'room_id': room_id,
-            'usernames': [od, md],
-        })
-        await _send(ws, {
-            'type': 'start', 'color': 2,
-            'message': '您执白（后手），黑棋先走',
-            'room_id': room_id,
-            'usernames': [od, md],
-        })
-        await _send(opponent, {'type': 'turn', 'color': 1})
-        await _start_timer(room_id)
-        # Persist active game
-        _submit_db(save_active_game, room_id,
-                         o_info['username'], info['username'],
-                         board_to_list(rooms[room_id]['board']), 1, [])
-    else:
-        waiting_queue[ws] = True
-        await _send(ws, {'type': 'waiting', 'message': '等待对手...'})
+    # Outside lock: send start messages, start timer, persist game
+    await _send(opponent, {
+        'type': 'start', 'color': 1,
+        'message': '您执黑（先手）',
+        'room_id': room_id,
+        'usernames': [od, md],
+    })
+    await _send(ws, {
+        'type': 'start', 'color': 2,
+        'message': '您执白（后手），黑棋先走',
+        'room_id': room_id,
+        'usernames': [od, md],
+    })
+    await _send(opponent, {'type': 'turn', 'color': 1})
+    await _start_timer(room_id)
+    # Persist active game
+    _submit_db(save_active_game, room_id,
+                     o_info['username'], info['username'],
+                     board_to_list(rooms[room_id]['board']), 1, [])
 
 
 async def _handle_cancel_match(ws):
-    waiting_queue.pop(ws, None)
+    async with _match_lock:
+        waiting_queue.pop(ws, None)
     await _send(ws, {'type': 'match_cancelled', 'message': '已取消匹配'})
 
 
@@ -744,8 +765,9 @@ async def _handle_create_room(ws, is_public=False):
         'is_public': is_public,
         '_created_at': time.time(),
     }
-    waiting_queue.pop(ws, None)
-    info['room_id'] = room_id
+    async with _match_lock:
+        waiting_queue.pop(ws, None)
+        info['room_id'] = room_id
 
     await _send(ws, {'type': 'room_created', 'room_id': room_id})
     await _send(ws, {'type': 'waiting', 'message': f'房间 {room_id} 已创建，等待对手加入...'})
@@ -802,12 +824,13 @@ async def _handle_join_room(ws, room_id, as_spectator):
         return
 
     # Join as player
-    waiting_queue.pop(ws, None)
-    slot = 0 if room['players'][0] is None else 1
-    room['players'][slot] = ws
-    room['usernames'][slot] = info.get('display_name', info['username'])
-    room['accounts'][slot] = info['username']
-    info['room_id'] = room_id
+    async with _match_lock:
+        waiting_queue.pop(ws, None)
+        slot = 0 if room['players'][0] is None else 1
+        room['players'][slot] = ws
+        room['usernames'][slot] = info.get('display_name', info['username'])
+        room['accounts'][slot] = info['username']
+        info['room_id'] = room_id
 
     await _send(ws, {
         'type': 'room_joined',
@@ -851,8 +874,9 @@ async def _handle_join_room(ws, room_id, as_spectator):
                    board_to_list(room['board']), 1, [])
 
         # Notify spectators
-        for s in room.get('spectators', set()):
-            await _send(s, {'type': 'chat', 'username': '系统', 'message': '对局已开始！'})
+        specs = room.get('spectators', set())
+        if specs:
+            await asyncio.gather(*(_send(s, {'type': 'chat', 'username': '系统', 'message': '对局已开始！'}) for s in specs), return_exceptions=True)
 
 
 async def _handle_leave_room(ws):
@@ -862,7 +886,8 @@ async def _handle_leave_room(ws):
         return
 
     # Clean up any lingering matchmaking state
-    waiting_queue.pop(ws, None)
+    async with _match_lock:
+        waiting_queue.pop(ws, None)
 
     room_id = info['room_id']
     room = rooms.get(room_id)
@@ -963,9 +988,17 @@ async def _handle_move(ws, x, y):
         await _send(ws, {'type': 'error', 'error': '还没轮到您'})
         return
 
+    # Reject moves while an undo request from this player is pending
+    if room.get('_undo_pending') == player_idx:
+        await _send(ws, {'type': 'error', 'error': '请等待对手回应悔棋请求'})
+        return
+
     # Forbidden move check for black (Renju rules)
     if color == 1:
-        forbid = check_forbidden_on_board(room['board'], x, y)
+        forbid = await check_forbidden_on_board(room['board'], x, y)
+        # Re-validate — the timer may have finished the game during the await
+        if room['state'] != 'playing' or room['board'][y][x] != 0:
+            return
         if forbid != 0:
             reasons = {1: '禁手：双活三', 2: '禁手：双四', 3: '禁手：长连'}
             await _send(ws, {'type': 'error', 'error': reasons.get(forbid, '禁手')})
@@ -1006,14 +1039,15 @@ async def _handle_move(ws, x, y):
         for i, p in enumerate(room['players']):
             if p:
                 await _send(p, game_over_msg)
-        for s in room.get('spectators', set()):
-            await _send(s, game_over_msg)
+        specs = list(room.get('spectators', set()))
+        if specs:
+            await asyncio.gather(*(_send(s, game_over_msg) for s in specs), return_exceptions=True)
         await _broadcast_room(room_id, {
             'type': 'chat', 'username': '系统', 'message': f'{winner_username} 获胜（五子连珠）！'
         })
         _save_game_record(room_id, winner_username, '五子连珠')
         _submit_db(delete_active_game, room_id)
-        _start_rematch_timer(room_id)
+        await _start_rematch_timer(room_id)
     else:
         # Flip current_player AFTER broadcast to prevent turn race
         room['current_player'] = next_color
@@ -1022,10 +1056,10 @@ async def _handle_move(ws, x, y):
         if len(room['moves']) >= BOARD_SIZE * BOARD_SIZE:
             room['state'] = 'finished'
             room['_winner'] = -1
-            await _broadcast_room(room_id, {'type': 'game_over', 'winner': '平局', 'reason': '棋盘已满'})
+            await _broadcast_room(room_id, {'type': 'game_over', 'winner': '平局', 'reason': '棋盘已满', 'moves': room['moves']})
             _save_game_record(room_id, '平局', '棋盘已满')
             _submit_db(delete_active_game, room_id)
-            _start_rematch_timer(room_id)
+            await _start_rematch_timer(room_id)
             return
 
         # Notify next turn
@@ -1090,6 +1124,9 @@ async def _handle_request_undo(ws):
         await _send(ws, {'type': 'error', 'error': '本局悔棋次数已用完（3次）'})
         return
 
+    # Prevent the requester from making a move while request is pending
+    room['_undo_pending'] = player_idx
+
     # Forward request to opponent
     other_idx = 1 - player_idx
     other_ws = room['players'][other_idx]
@@ -1109,6 +1146,9 @@ async def _handle_undo_response(ws, accept):
     room = rooms.get(room_id)
     if not room or room['state'] != 'playing':
         return
+
+    # Clear undo pending flag regardless of accept/reject
+    room.pop('_undo_pending', None)
 
     if room['players'][0] == ws:
         player_idx = 0
@@ -1171,8 +1211,9 @@ async def _handle_undo_response(ws, accept):
     await _broadcast_to_player(room, player_idx, {
         'type': 'undo', 'board': board_to_list(room['board']), 'moves': room['moves'],
     })
-    for s in room.get('spectators', set()):
-        await _send(s, {'type': 'undo', 'board': board_to_list(room['board']), 'moves': room['moves']})
+    specs = list(room.get('spectators', set()))
+    if specs:
+        await asyncio.gather(*(_send(s, {'type': 'undo', 'board': board_to_list(room['board']), 'moves': room['moves']}) for s in specs), return_exceptions=True)
 
     await _broadcast_to_player(room, other_idx, {'type': 'turn', 'color': request_color})
     await _start_timer(room_id)
@@ -1214,13 +1255,14 @@ async def _handle_resign(ws):
     for i, p in enumerate(room['players']):
         if p:
             await _send(p, {**game_over_msg, 'moves': room['moves']})
-    for s in room.get('spectators', set()):
-        await _send(s, game_over_msg)
+    specs = list(room.get('spectators', set()))
+    if specs:
+        await asyncio.gather(*(_send(s, game_over_msg) for s in specs), return_exceptions=True)
 
     await _broadcast_room(room_id, {
         'type': 'chat', 'username': '系统', 'message': f'{loser_username} 认输，{winner_username} 获胜！'
     })
-    _start_rematch_timer(room_id)
+    await _start_rematch_timer(room_id)
 
 
 async def _start_rematch_timer(room_id):
@@ -1279,13 +1321,14 @@ async def _handle_rematch(ws):
         room.pop(rematch_key, None)
         room.pop('_undo_count_0', None)
         room.pop('_undo_count_1', None)
+        room.pop('_undo_pending', None)
         room['board'] = make_board()
         room['moves'] = []
         room['state'] = 'playing'
 
         # Swap colors for rematch: loser becomes black.
         # For draws (_winner == -1), keep original assignment.
-        winner = room.get('_winner', 0)
+        winner = room.pop('_winner', 0)
         if winner == -1:
             new_black_idx = 1  # white becomes black
         else:
@@ -1308,8 +1351,9 @@ async def _handle_rematch(ws):
                 })
         await _broadcast_to_player(room, 0, {'type': 'turn', 'color': 1})
         await _start_timer(room_id)
-        for s in room.get('spectators', set()):
-            await _send(s, {'type': 'chat', 'username': '系统', 'message': '再来一局！新对局开始'})
+        specs = room.get('spectators', set())
+        if specs:
+            await asyncio.gather(*(_send(s, {'type': 'chat', 'username': '系统', 'message': '再来一局！新对局开始'}) for s in specs), return_exceptions=True)
         # Persist new game (use accounts for DB consistency)
         _submit_db(save_active_game, room_id,
                          room.get('accounts', room['usernames'])[0],
@@ -1431,10 +1475,14 @@ async def _on_disconnect(ws):
 
 @web.middleware
 async def rate_limit_middleware(request, handler):
-    # Prefer X-Real-IP / X-Forwarded-For when behind a reverse proxy
-    ip = (request.headers.get('X-Real-IP') or
-          request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
-          request.remote)
+    # Only trust proxy headers when behind a known reverse proxy.
+    # Otherwise an attacker can spoof X-Forwarded-For to bypass rate limiting.
+    if os.getenv('TRUSTED_PROXY') == 'true':
+        ip = (request.headers.get('X-Real-IP') or
+              request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
+              request.remote)
+    else:
+        ip = request.remote
     if ip and not _check_ratelimit(ip):
         return web.json_response({'success': False, 'error': '请求过于频繁，请稍后再试'}, status=429)
     return await handler(request)
@@ -1446,7 +1494,8 @@ async def cors_middleware(request, handler):
         response = web.Response()
     else:
         response = await handler(request)
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = request.headers.get('Origin', '')
+    response.headers['Access-Control-Allow-Origin'] = origin if origin else '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
