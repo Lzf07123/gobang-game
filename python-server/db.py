@@ -35,9 +35,28 @@ def init_db():
             id INT AUTO_INCREMENT PRIMARY KEY,
             username VARCHAR(50) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
+            account VARCHAR(50) UNIQUE DEFAULT NULL,
+            display_name VARCHAR(50) DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migration: add columns if they don't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN account VARCHAR(50) UNIQUE DEFAULT NULL")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN display_name VARCHAR(50) DEFAULT NULL")
+    except Exception:
+        pass
+    # Migrate existing rows: copy username to account and display_name if null
+    try:
+        cursor.execute("UPDATE users SET account = username WHERE account IS NULL")
+        cursor.execute("UPDATE users SET display_name = username WHERE display_name IS NULL")
+        cursor.execute("ALTER TABLE users MODIFY account VARCHAR(50) NOT NULL")
+        cursor.execute("ALTER TABLE users MODIFY display_name VARCHAR(50) NOT NULL")
+    except Exception:
+        pass
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -109,6 +128,24 @@ def get_user_session(username):
         cursor.execute("SELECT session_id FROM user_sessions WHERE username = %s", (username,))
         row = cursor.fetchone()
         return row['session_id'] if row else None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def update_display_name(account, new_name):
+    """Update display_name for a user. Returns True on success, False if name taken."""
+    conn = _get_conn()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id FROM users WHERE display_name = %s AND account != %s",
+                       (new_name, account))
+        if cursor.fetchone():
+            return False
+        cursor.execute("UPDATE users SET display_name = %s WHERE account = %s",
+                       (new_name, account))
+        conn.commit()
+        return True
     finally:
         cursor.close()
         conn.close()

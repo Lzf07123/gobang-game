@@ -1,6 +1,7 @@
 // ===== State =====
 let token = '';
-let username = '';
+let username = '';   // account (login ID)
+let displayName = ''; // display name
 let ws = null;
 let board = [];
 let gameStarted = false;
@@ -29,7 +30,15 @@ let replayMoves = [];
 let replayIndex = -1;
 
 const SIZE = 15;
+const BASE_SIZE = 480;
+const BASE_CELL = 30;
+const BASE_PAD = 15;
 const ANIMATION_DURATION = 150; // ms
+
+let CELL = BASE_CELL;
+let PAD = BASE_PAD;
+let BOARD_PX = CELL * (SIZE - 1);
+let SCALE = 1;  // current canvas scale factor
 
 // Backend URL
 const apiPort = document.querySelector('meta[name="api-port"]')?.content;
@@ -46,9 +55,6 @@ const wsBase = sameOrigin
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const CELL = 30;
-const PAD = 15;
-const BOARD_PX = CELL * (SIZE - 1);   // 420
 
 // ===== Sound =====
 let audioCtx = null;
@@ -166,16 +172,18 @@ async function doLogin() {
   setLoading(btn, true);
   try {
     const res = await apiPost('/login', {
-      username: document.getElementById('username').value,
-      password: document.getElementById('password').value,
+      account: document.getElementById('login-account').value.trim(),
+      password: document.getElementById('login-password').value,
     });
     if (res.success) {
       kickedOut = false;
       token = res.token;
-      username = res.username;
+      username = res.account;
+      displayName = res.display_name;
       localStorage.setItem('goban_token', token);
-      localStorage.setItem('goban_username', username);
-      showGameArea(res.username);
+      localStorage.setItem('goban_account', username);
+      localStorage.setItem('goban_display_name', displayName);
+      showGameArea(displayName);
       connectWS();
     } else {
       showAuthMsg(res.error, false);
@@ -191,10 +199,17 @@ async function doRegister() {
   setLoading(btn, true);
   try {
     const res = await apiPost('/register', {
-      username: document.getElementById('username').value,
-      password: document.getElementById('password').value,
+      account: document.getElementById('reg-account').value.trim(),
+      display_name: document.getElementById('reg-display-name').value.trim(),
+      password: document.getElementById('reg-password').value,
     });
-    showAuthMsg(res.success ? '注册成功，请登录' : res.error, res.success);
+    if (res.success) {
+      showAuthMsg('注册成功，请切换到登录面板登录', true);
+      switchAuthTab('login');
+      document.getElementById('login-account').value = res.user.account;
+    } else {
+      showAuthMsg(res.error, false);
+    }
   } catch(e) {
     showAuthMsg('网络错误，请检查连接', false);
   }
@@ -226,6 +241,21 @@ async function apiPost(path, body) {
   return await resp.json();
 }
 
+// ===== Auth Tab Switch =====
+function switchAuthTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  if (tab === 'login') {
+    document.querySelector('.auth-tab:first-child').classList.add('active');
+    document.getElementById('auth-login').style.display = '';
+    document.getElementById('auth-register').style.display = 'none';
+  } else {
+    document.querySelector('.auth-tab:last-child').classList.add('active');
+    document.getElementById('auth-login').style.display = 'none';
+    document.getElementById('auth-register').style.display = '';
+  }
+  document.getElementById('auth-msg').textContent = '';
+}
+
 // ===== UI Toggles =====
 function showGameArea(user) {
   document.getElementById('auth-area').style.display = 'none';
@@ -238,7 +268,8 @@ function showGameArea(user) {
 
 function showAuthArea() {
   localStorage.removeItem('goban_token');
-  localStorage.removeItem('goban_username');
+  localStorage.removeItem('goban_account');
+  localStorage.removeItem('goban_display_name');
   document.getElementById('auth-area').style.display = '';
   document.getElementById('game-area').style.display = 'none';
   document.getElementById('cancel-match-btn').style.display = 'none';
@@ -255,8 +286,10 @@ function handleKicked(message) {
   kickedOut = true;
   token = '';
   username = '';
+  displayName = '';
   localStorage.removeItem('goban_token');
-  localStorage.removeItem('goban_username');
+  localStorage.removeItem('goban_account');
+  localStorage.removeItem('goban_display_name');
 
   if (ws) {
     ws.onclose = null;
@@ -312,6 +345,12 @@ function connectWS() {
 function handleMessage(data) {
   switch (data.type) {
     case 'auth_ok':
+      if (data.display_name) {
+        displayName = data.display_name;
+        localStorage.setItem('goban_display_name', displayName);
+        document.getElementById('username-display').textContent = displayName;
+        document.getElementById('avatar').textContent = displayName.charAt(0).toUpperCase();
+      }
       setStatus('已连接，准备就绪');
       resetGameState();
       drawBoard();
@@ -337,6 +376,7 @@ function handleMessage(data) {
       if (data.usernames) roomPlayers = data.usernames;
       board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
       lastMove = null;
+      winLine = null;
       currentMoves = [];
       setStatus(data.message);
       document.getElementById('match-btn').disabled = true;
@@ -383,7 +423,7 @@ function handleMessage(data) {
       if (!isSpectator && roomId) {
         document.getElementById('rematch-actions').style.display = '';
       }
-      if (data.winner === username) {
+      if (data.winner === displayName) {
         playWinSound();
       } else if (data.winner !== '平局') {
         playLoseSound();
@@ -392,7 +432,7 @@ function handleMessage(data) {
         currentMoves = data.moves;
       }
       if (currentMoves.length > 0 && !isSpectator) {
-        const opponent = roomPlayers.find(p => p && p !== username) || '对手';
+        const opponent = roomPlayers.find(p => p && p !== displayName) || '对手';
         saveGameRecord(opponent, data.winner, currentMoves);
       }
       break;
@@ -732,8 +772,12 @@ async function toggleProfile() {
   const panel = document.getElementById('profile-panel');
   if (panel.style.display === 'none' || !panel.style.display) {
     panel.style.display = 'block';
+    document.querySelector('.profile-name').textContent = displayName;
+    document.querySelector('.profile-avatar-large').textContent = displayName.charAt(0).toUpperCase();
+    document.getElementById('profile-name-input').value = displayName;
+    document.querySelector('.profile-edit-name').style.display = 'none';
     try {
-      const resp = await fetch(`${httpBase}/api/profile?username=${encodeURIComponent(username)}`);
+      const resp = await fetch(`${httpBase}/api/profile?account=${encodeURIComponent(username)}`);
       const data = await resp.json();
       document.getElementById('stat-total').textContent = data.total_games || 0;
       document.getElementById('stat-wins').textContent = data.wins || 0;
@@ -744,16 +788,60 @@ async function toggleProfile() {
       document.getElementById('stat-wins').textContent = '0';
       document.getElementById('stat-rate').textContent = '-';
     }
-    document.querySelector('.profile-name').textContent = username;
-    document.querySelector('.profile-avatar-large').textContent = username.charAt(0).toUpperCase();
   } else {
     panel.style.display = 'none';
+    document.querySelector('.profile-edit-name').style.display = 'none';
+  }
+}
+
+function startEditName() {
+  document.getElementById('profile-name-input').value = displayName;
+  document.querySelector('.profile-edit-name').style.display = '';
+}
+
+function cancelEditName() {
+  document.querySelector('.profile-edit-name').style.display = 'none';
+  document.getElementById('profile-name-msg').textContent = '';
+}
+
+async function saveDisplayName() {
+  const input = document.getElementById('profile-name-input');
+  const newName = input.value.trim();
+  if (!newName || newName.length < 2 || newName.length > 20) {
+    document.getElementById('profile-name-msg').textContent = '用户名需2-20个字符';
+    document.getElementById('profile-name-msg').style.color = '#ff6b6b';
+    return;
+  }
+  try {
+    const resp = await fetch(`${httpBase}/api/profile/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: username, display_name: newName }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      displayName = newName;
+      localStorage.setItem('goban_display_name', displayName);
+      document.querySelector('.profile-name').textContent = displayName;
+      document.querySelector('.profile-avatar-large').textContent = displayName.charAt(0).toUpperCase();
+      document.getElementById('username-display').textContent = displayName;
+      document.getElementById('avatar').textContent = displayName.charAt(0).toUpperCase();
+      document.querySelector('.profile-edit-name').style.display = 'none';
+      document.getElementById('profile-name-msg').textContent = '';
+    } else {
+      document.getElementById('profile-name-msg').textContent = data.error || '修改失败';
+      document.getElementById('profile-name-msg').style.color = '#ff6b6b';
+    }
+  } catch(e) {
+    document.getElementById('profile-name-msg').textContent = '网络错误';
+    document.getElementById('profile-name-msg').style.color = '#ff6b6b';
   }
 }
 
 function doLogout() {
   localStorage.removeItem('goban_token');
-  localStorage.removeItem('goban_username');
+  localStorage.removeItem('goban_account');
+  localStorage.removeItem('goban_display_name');
   document.getElementById('profile-panel').style.display = 'none';
   showAuthArea();
 }
@@ -799,20 +887,39 @@ function showRoomBrowserOverlay() {
   const list = overlay.querySelector('.room-browser-items');
   list.innerHTML = '';
   if (roomBrowserRooms.length === 0) {
-    list.innerHTML = '<div class="replay-empty">暂无等待中的房间</div>';
+    list.innerHTML = '<div class="replay-empty">暂无可用房间</div>';
   } else {
     roomBrowserRooms.forEach(r => {
+      const isPlaying = r.state === 'playing';
       const el = document.createElement('div');
       el.className = 'room-browser-item';
+      const playerStr = (r.players || [r.creator]).join(' vs ');
+      const stateBadge = isPlaying
+        ? '<span class="room-browser-badge playing">对战中</span>'
+        : '<span class="room-browser-badge waiting">等待中</span>';
+      const specInfo = r.spectator_count > 0
+        ? `<span class="room-browser-spec">👁 ${r.spectator_count}</span>` : '';
+      const actionBtn = isPlaying
+        ? `<button class="btn-small room-browser-spectate" data-room="${r.room_id}">观战</button>`
+        : `<button class="btn-small room-browser-join" data-room="${r.room_id}">加入</button>`;
       el.innerHTML = `
         <span class="room-browser-code">${r.room_id}</span>
-        <span class="room-browser-creator">${r.creator || '未知'}</span>
-        <button class="btn-small room-browser-join" data-room="${r.room_id}">加入</button>
+        <span class="room-browser-creator" title="${playerStr}">${playerStr}</span>
+        ${stateBadge}
+        ${specInfo}
+        ${actionBtn}
       `;
-      el.querySelector('.room-browser-join').onclick = () => {
-        document.getElementById('room-code-input').value = r.room_id;
-        hideRoomBrowser();
-        joinRoom();
+      const btn = isPlaying ? el.querySelector('.room-browser-spectate') : el.querySelector('.room-browser-join');
+      btn.onclick = () => {
+        if (isPlaying) {
+          document.getElementById('spectate-code-input').value = r.room_id;
+          hideRoomBrowser();
+          spectateRoom();
+        } else {
+          document.getElementById('room-code-input').value = r.room_id;
+          hideRoomBrowser();
+          joinRoom();
+        }
       };
       list.appendChild(el);
     });
@@ -1060,7 +1167,7 @@ function drawBoard() {
 
   // Grid lines
   ctx.strokeStyle = theme.grid;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = Math.max(0.5, SCALE);
   for (let i = 0; i < SIZE; i++) {
     const p = PAD + i * CELL;
     ctx.beginPath();
@@ -1076,9 +1183,10 @@ function drawBoard() {
   // Star points
   const stars = [[3,3], [3,7], [3,11], [7,3], [7,7], [7,11], [11,3], [11,7], [11,11]];
   ctx.fillStyle = theme.star;
+  const starR = 3 * SCALE;
   for (const [sx, sy] of stars) {
     ctx.beginPath();
-    ctx.arc(PAD + sx * CELL, PAD + sy * CELL, 3, 0, Math.PI * 2);
+    ctx.arc(PAD + sx * CELL, PAD + sy * CELL, starR, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1107,7 +1215,7 @@ function drawBoard() {
         const cx = PAD + m.x * CELL;
         const cy = PAD + m.y * CELL;
         ctx.fillStyle = board[m.y][m.x] === 1 ? '#ddd' : '#333';
-        ctx.font = 'bold 10px sans-serif';
+        ctx.font = `bold ${Math.max(7, 10 * SCALE)}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(i + 1, cx, cy);
@@ -1117,16 +1225,17 @@ function drawBoard() {
 
   // Coordinate labels
   ctx.fillStyle = theme.label;
-  ctx.font = '10px sans-serif';
+  ctx.font = `${Math.max(7, 10 * SCALE)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
+  const labelOffset = Math.max(2, PAD * 0.13);
   for (let i = 0; i < SIZE; i++) {
-    ctx.fillText(String.fromCharCode(65 + i), PAD + i * CELL, 0);
+    ctx.fillText(String.fromCharCode(65 + i), PAD + i * CELL, labelOffset);
   }
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   for (let i = 0; i < SIZE; i++) {
-    ctx.fillText(String(SIZE - i), 0, PAD + i * CELL);
+    ctx.fillText(String(SIZE - i), labelOffset, PAD + i * CELL);
   }
 }
 
@@ -1135,24 +1244,25 @@ function drawPiece(x, y, color, scale, theme) {
   const cx = PAD + x * CELL;
   const cy = PAD + y * CELL;
   const r = (CELL * 0.42) * (scale || 1);
+  const go = 3 * SCALE;  // gradient offset
 
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
 
   if (color === 1) {
-    const grad = ctx.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, r);
+    const grad = ctx.createRadialGradient(cx - go, cy - go, go * 0.7, cx, cy, r);
     grad.addColorStop(0, t.black1);
     grad.addColorStop(1, t.black2);
     ctx.fillStyle = grad;
   } else {
-    const grad = ctx.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, r);
+    const grad = ctx.createRadialGradient(cx - go, cy - go, go * 0.7, cx, cy, r);
     grad.addColorStop(0, t.white1);
     grad.addColorStop(1, t.white2);
     ctx.fillStyle = grad;
   }
   ctx.fill();
   ctx.strokeStyle = '#333';
-  ctx.lineWidth = 0.5;
+  ctx.lineWidth = Math.max(0.3, 0.5 * SCALE);
   ctx.stroke();
 }
 
@@ -1160,7 +1270,7 @@ function drawLastMoveMarker(x, y, color, theme) {
   const t = theme || getThemeColors();
   const cx = PAD + x * CELL;
   const cy = PAD + y * CELL;
-  const r = 4;
+  const r = 4 * SCALE;
 
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -1171,18 +1281,20 @@ function drawLastMoveMarker(x, y, color, theme) {
 function drawWinLineHighlight(points, theme) {
   const t = theme || getThemeColors();
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
+  const lw1 = Math.max(1.5, 3 * SCALE);
+  const lw2 = Math.max(1, 2 * SCALE);
   for (const p of points) {
     const cx = PAD + p[0] * CELL;
     const cy = PAD + p[1] * CELL;
     ctx.beginPath();
     ctx.arc(cx, cy, CELL * 0.45, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(${t.winGlow}, ${0.5 + pulse * 0.5})`;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = lw1;
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(cx, cy, CELL * 0.48, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(${t.winGlow}, ${0.2 + pulse * 0.3})`;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = lw2;
     ctx.stroke();
   }
   if (winLine) requestAnimationFrame(() => drawBoard());
@@ -1234,7 +1346,8 @@ function handleCanvasInput(clientX, clientY) {
     }
   }
 
-  if (bestDist > (CELL / 2) ** 2 || board[by][bx] !== 0) return;
+  const snapRadius = CELL * 0.48;  // slightly less than half-cell for better UX
+  if (bestDist > snapRadius * snapRadius || board[by][bx] !== 0) return;
 
   ws.send(JSON.stringify({ type: 'move', x: bx, y: by }));
   myTurn = false;
@@ -1294,14 +1407,45 @@ function resetGameState() {
 // ===== Canvas Sizing (Responsive) =====
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const maxWidth = Math.min(window.innerWidth - 40, 480);
-  const maxHeight = window.innerHeight - 220;
-  const size = Math.min(maxWidth, maxHeight, 480);
+  const isMobile = window.innerWidth <= 700;
+
+  // Horizontal: full width minus side padding
+  const hPad = isMobile ? 20 : 40;
+  const maxW = Math.min(window.innerWidth - hPad, BASE_SIZE);
+
+  // Vertical: measure actual UI elements
+  const bodyPad = isMobile ? 8 : 16;
+  const headerEl = document.querySelector('.game-header');
+  const headerH = headerEl ? headerEl.offsetHeight : 44;
+  const roomEl = document.getElementById('room-info');
+  const roomH = (roomEl && roomEl.style.display !== 'none') ? roomEl.offsetHeight : 0;
+  const actionsEl = document.getElementById('game-actions');
+  const rematchEl = document.getElementById('rematch-actions');
+  const actionsH = Math.max(
+    (actionsEl && actionsEl.style.display !== 'none') ? actionsEl.offsetHeight : 0,
+    (rematchEl && rematchEl.style.display !== 'none') ? rematchEl.offsetHeight : 0
+  );
+  // On mobile, reserve minimal space for side-panel controls so they're discoverable
+  const belowBoard = isMobile ? 130 : 0;
+  const usedV = bodyPad + headerH + roomH + actionsH + belowBoard + 16;
+  const maxH = Math.min(window.innerHeight - usedV, BASE_SIZE);
+
+  const size = Math.max(220, Math.min(maxW, maxH, BASE_SIZE));
+
+  // Scale board constants proportionally
+  const s = size / BASE_SIZE;
+  SCALE = s;
+  CELL = BASE_CELL * s;
+  PAD = BASE_PAD * s;
+  BOARD_PX = CELL * (SIZE - 1);
+
   canvas.width = size * dpr;
   canvas.height = size * dpr;
   canvas.style.width = size + 'px';
   canvas.style.height = size + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  drawBoard();
 }
 
 window.addEventListener('resize', resizeCanvas);
@@ -1327,12 +1471,13 @@ document.addEventListener('click', (e) => {
   initTheme();
   document.getElementById('sound-toggle-btn').textContent = soundEnabled ? '🔊' : '🔇';
   const savedToken = localStorage.getItem('goban_token');
-  const savedUsername = localStorage.getItem('goban_username');
-  if (savedToken && savedUsername) {
+  const savedAccount = localStorage.getItem('goban_account');
+  if (savedToken && savedAccount) {
     kickedOut = false;
     token = savedToken;
-    username = savedUsername;
-    showGameArea(username);
+    username = savedAccount;
+    displayName = localStorage.getItem('goban_display_name') || savedAccount;
+    showGameArea(displayName);
     connectWS();
   }
 })();

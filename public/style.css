@@ -149,6 +149,40 @@ body::after {
   text-align: left;
 }
 
+.auth-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.2rem;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 0.5rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.auth-tab.active {
+  background: rgba(78, 205, 196, 0.15);
+  color: #4ecdc4;
+  border-color: rgba(78, 205, 196, 0.3);
+}
+
+.auth-tab:hover {
+  color: #4ecdc4;
+}
+
+#auth-login .btn-primary,
+#auth-register .btn-secondary {
+  width: 100%;
+}
+
 .input-group {
   position: relative;
   margin-bottom: 1rem;
@@ -304,10 +338,28 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 }
 
 .username-tag {
-  background: #0f3460;
+  background: rgba(78, 205, 196, 0.2);
+  color: #4ecdc4;
   padding: 0.25rem 0.6rem;
   border-radius: 4px;
   font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* Theme-specific username-tag overrides */
+body[data-theme="light"] .username-tag {
+  background: rgba(78, 205, 196, 0.15);
+  color: #2c7a7a;
+}
+
+body[data-theme="dark"] .username-tag {
+  background: rgba(78, 205, 196, 0.25);
+  color: #5ef7ef;
+}
+
+body[data-theme="bamboo"] .username-tag {
+  background: rgba(78, 205, 196, 0.2);
+  color: #4ecdc4;
 }
 
 #status-text { font-size: 1rem; flex: 1; min-width: 120px; }
@@ -480,9 +532,8 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   touch-action: manipulation;
   background: #d4a76a;
   box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-  width: 480px;
-  height: 480px;
   max-width: 100%;
+  display: block;
 }
 
 /* ===== Room Controls ===== */
@@ -695,14 +746,52 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .room-browser-creator {
   flex: 1;
-  font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.room-browser-join {
+.room-browser-badge {
+  flex: none;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.room-browser-badge.playing {
+  background: rgba(233, 69, 96, 0.2);
+  color: #e94560;
+}
+
+.room-browser-badge.waiting {
+  background: rgba(78, 205, 196, 0.15);
+  color: #4ecdc4;
+}
+
+.room-browser-spec {
+  flex: none;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.room-browser-join,
+.room-browser-spectate {
   flex: none;
   padding: 0.3rem 0.8rem;
   font-size: 0.8rem;
+}
+
+.room-browser-spectate {
+  background: rgba(255, 215, 0, 0.15);
+  color: #ffd93d;
+  border: 1px solid rgba(255, 215, 0, 0.25);
+}
+
+.room-browser-spectate:hover:not(:disabled) {
+  background: rgba(255, 215, 0, 0.25);
 }
 
 /* ===== Leave Button ===== */
@@ -726,11 +815,6 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
     min-width: unset;
     max-width: 100%;
     width: 100%;
-  }
-
-  #canvas {
-    width: min(95vw, 100vh - 280px);
-    height: min(95vw, 100vh - 280px);
   }
 
   .game-header {
@@ -814,13 +898,8 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
   }
 }
 
-/* Landscape phone warning */
+/* Landscape phone */
 @media (max-height: 500px) and (orientation: landscape) {
-  #canvas {
-    width: min(80vh, 380px);
-    height: min(80vh, 380px);
-  }
-
   .game-layout {
     flex-direction: row;
     align-items: flex-start;

@@ -7,7 +7,8 @@ import time
 import mysql.connector
 from db import execute_query, set_user_session
 
-_USERNAME_RE = re.compile(r'^[\w一-鿿]{2,20}$')
+_ACCOUNT_RE = re.compile(r'^[a-zA-Z0-9]{2,20}$')
+_DISPLAY_NAME_RE = re.compile(r'^[\w一-鿿]{2,20}$')
 
 _JWT_SECRET = os.getenv('JWT_SECRET', '')
 if not _JWT_SECRET or _JWT_SECRET == 'your_jwt_secret_key_change_me':
@@ -45,41 +46,44 @@ def verify_token(token):
         return None, None
 
 
-def register(username, password):
-    if not username or not _USERNAME_RE.match(username):
+def register(account, display_name, password):
+    if not account or not _ACCOUNT_RE.match(account):
+        return False, "账号仅支持字母和数字，2-20个字符"
+    if not display_name or not _DISPLAY_NAME_RE.match(display_name):
         return False, "用户名仅支持中英文、数字、下划线，2-20个字符"
     if len(password) < 6:
         return False, "密码长度至少6位"
 
     existing = execute_query(
-        "SELECT id FROM users WHERE username = %s", (username,)
+        "SELECT id FROM users WHERE account = %s", (account,)
     )
     if existing:
-        return False, "用户名已存在"
+        return False, "账号已存在"
 
     pw_hash = _hash_password(password)
     try:
         execute_query(
-            "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-            (username, pw_hash), fetch=False
+            "INSERT INTO users (username, account, display_name, password_hash) VALUES (%s, %s, %s, %s)",
+            (account, account, display_name, pw_hash), fetch=False
         )
     except mysql.connector.IntegrityError:
-        return False, "用户名已存在"
+        return False, "账号已存在"
     return True, None
 
 
-def login(username, password):
+def login(account, password):
     rows = execute_query(
-        "SELECT password_hash FROM users WHERE username = %s", (username,)
+        "SELECT username, display_name, password_hash FROM users WHERE account = %s", (account,)
     )
     if not rows:
-        return False, "用户名或密码错误"
+        return False, "账号或密码错误"
 
-    if not _check_password(password, rows[0]['password_hash']):
-        return False, "用户名或密码错误"
+    row = rows[0]
+    if not _check_password(password, row['password_hash']):
+        return False, "账号或密码错误"
 
     session_id = secrets.token_hex(16)
-    set_user_session(username, session_id)
+    set_user_session(row['username'], session_id)
 
-    token = _make_token(username, session_id)
-    return True, token
+    token = _make_token(row['username'], session_id)
+    return True, (token, row['display_name'])

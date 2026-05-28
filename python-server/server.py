@@ -21,7 +21,8 @@ from dotenv import load_dotenv
 from db import (init_db, execute_query, check_env, save_game,
     get_user_games, get_game_moves, get_user_stats,
     init_active_games_table, save_active_game, update_active_game,
-    delete_active_game, get_user_session, clear_user_session)
+    delete_active_game, get_user_session, clear_user_session,
+    update_display_name as db_update_display_name)
 from auth import register, login, verify_token
 from game_engine import check_winner_on_board, make_board, board_to_list, BOARD_SIZE
 
@@ -140,9 +141,7 @@ async def _timer_loop(room_id):
         winner_username = room['usernames'][winner_idx] or ('白方' if winner_idx == 1 else '黑方')
         room['state'] = 'finished'
         room['_winner'] = winner_idx
-        for ws in room['players']:
-            if ws:
-                await _send(ws, {'type': 'game_over', 'winner': winner_username, 'reason': '对方超时'})
+        await _broadcast_room(room_id, {'type': 'game_over', 'winner': winner_username, 'reason': '对方超时'})
         await _broadcast_room(room_id, {'type': 'chat', 'username': '系统', 'message': f'{winner_username}获胜（对方超时）'})
         _save_game_record(room_id, winner_username, '对方超时')
         _executor.submit(delete_active_game, room_id)
@@ -156,12 +155,19 @@ def _save_game_record(room_id, winner_username, reason):
     room = rooms.get(room_id)
     if not room or room.get('matchmade') is False:
         return
+    accounts = room.get('accounts', room.get('usernames', []))
     usernames = room.get('usernames', [])
-    black = usernames[0] if len(usernames) > 0 else None
-    white = usernames[1] if len(usernames) > 1 else None
+    black = accounts[0] if len(accounts) > 0 else None
+    white = accounts[1] if len(accounts) > 1 else None
+    # Resolve winner display name → account for DB consistency
+    winner_account = winner_username
+    if winner_username != '平局' and winner_username in usernames:
+        idx = usernames.index(winner_username)
+        if idx < len(accounts):
+            winner_account = accounts[idx]
     moves = list(enumerate(room.get('moves', []), 1))
     move_rows = [(i, m[0], m[1], m[2]) for i, m in moves]
-    _executor.submit(save_game, room_id, black, white, winner_username, reason, move_rows)
+    _executor.submit(save_game, room_id, black, white, winner_account, reason, move_rows)
 
 
 def _cleanup_room(room_id):
@@ -203,15 +209,16 @@ async def handle_register(request):
     except Exception:
         return web.json_response({'success': False, 'error': '无效的JSON'}, status=400)
 
-    username = body.get('username', '').strip()
+    account = body.get('account', '').strip()
+    display_name = body.get('display_name', '').strip()
     password = body.get('password', '')
     try:
-        ok, err = await _run_db(register, username, password)
+        ok, err = await _run_db(register, account, display_name, password)
     except Exception as e:
         logger.error(f"注册失败: {e}", exc_info=True)
         return web.json_response({'success': False, 'error': '服务器内部错误'}, status=500)
     if ok:
-        return web.json_response({'success': True, 'user': {'username': username}})
+        return web.json_response({'success': True, 'user': {'account': account, 'display_name': display_name}})
     return web.json_response({'success': False, 'error': err})
 
 
@@ -221,15 +228,16 @@ async def handle_login(request):
     except Exception:
         return web.json_response({'success': False, 'error': '无效的JSON'}, status=400)
 
-    username = body.get('username', '').strip()
+    account = body.get('account', '').strip()
     password = body.get('password', '')
     try:
-        ok, result = await _run_db(login, username, password)
+        ok, result = await _run_db(login, account, password)
     except Exception as e:
         logger.error(f"登录失败: {e}", exc_info=True)
         return web.json_response({'success': False, 'error': '服务器内部错误'}, status=500)
     if ok:
-        return web.json_response({'success': True, 'token': result, 'username': username})
+        token, display_name = result
+        return web.json_response({'success': True, 'token': token, 'account': account, 'display_name': display_name})
     return web.json_response({'success': False, 'error': result})
 
 
@@ -238,16 +246,19 @@ async def handle_health(request):
 
 
 async def handle_list_rooms(request):
-    """List all waiting rooms for the room browser."""
+    """List all rooms (waiting + playing) for the room browser."""
     now = time.time()
     room_list = []
     for room_id, room in rooms.items():
-        if room['state'] == 'waiting' and room['players'][0]:
-            created = room.get('_created_at', now)
+        if room['state'] in ('waiting', 'playing') and room['players'][0]:
+            spectators = len(room.get('spectators', set()))
             room_list.append({
                 'room_id': room_id,
                 'creator': room['usernames'][0],
-                'waiting_seconds': int(now - created),
+                'players': [u for u in room.get('usernames', []) if u],
+                'state': room['state'],
+                'spectator_count': spectators,
+                'waiting_seconds': int(now - room.get('_created_at', now)) if room['state'] == 'waiting' else 0,
             })
     return web.json_response({'rooms': room_list})
 
@@ -292,19 +303,54 @@ async def handle_game_detail(request):
 
 async def handle_profile(request):
     """Get user profile and stats."""
-    username = request.query.get('username', '')
-    if not username:
-        return web.json_response({'error': '缺少用户名'}, status=400)
+    account = request.query.get('account', '')
+    if not account:
+        return web.json_response({'error': '缺少账号'}, status=400)
     try:
-        stats = await _run_db(get_user_stats, username)
+        stats = await _run_db(get_user_stats, account)
+        display_name = await _run_db(_get_display_name, account)
         return web.json_response({
-            'username': username,
+            'account': account,
+            'display_name': display_name or account,
             'total_games': stats['total'] if stats else 0,
             'wins': stats['wins'] if stats else 0,
         })
     except Exception as e:
         logger.error(f"查询用户统计失败: {e}", exc_info=True)
-        return web.json_response({'username': username, 'total_games': 0, 'wins': 0})
+        return web.json_response({'account': account, 'display_name': account, 'total_games': 0, 'wins': 0})
+
+
+def _get_display_name(account):
+    rows = execute_query("SELECT display_name FROM users WHERE account = %s", (account,))
+    return rows[0]['display_name'] if rows else None
+
+
+async def handle_update_profile(request):
+    """Update display_name for the authenticated user."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({'success': False, 'error': '无效的JSON'}, status=400)
+
+    account = body.get('account', '').strip()
+    new_name = body.get('display_name', '').strip()
+    if not account or not new_name:
+        return web.json_response({'success': False, 'error': '参数不完整'}, status=400)
+    if not new_name or len(new_name) < 2 or len(new_name) > 20:
+        return web.json_response({'success': False, 'error': '用户名需2-20个字符'}, status=400)
+
+    try:
+        ok = await _run_db(db_update_display_name, account, new_name)
+        if ok:
+            # Update in-memory clients display name
+            for ws, info in clients.items():
+                if info['username'] == account:
+                    info['display_name'] = new_name
+            return web.json_response({'success': True, 'display_name': new_name})
+        return web.json_response({'success': False, 'error': '用户名已被占用'})
+    except Exception as e:
+        logger.error(f"更新用户名失败: {e}", exc_info=True)
+        return web.json_response({'success': False, 'error': '服务器内部错误'}, status=500)
 
 
 # ===== WebSocket handler =====
@@ -387,6 +433,17 @@ async def _handle_auth(ws, token):
         await ws.close()
         return
 
+    # Look up display_name from database
+    display_name = None
+    try:
+        rows = await _run_db(execute_query, "SELECT display_name FROM users WHERE username = %s", (username,))
+        if rows:
+            display_name = rows[0]['display_name']
+    except Exception:
+        pass
+    if not display_name:
+        display_name = username
+
     # Kick existing connection with different session_id
     to_kick = []
     for existing_ws, info in list(clients.items()):
@@ -410,11 +467,12 @@ async def _handle_auth(ws, token):
     pending_auth.pop(ws, None)
     clients[ws] = {
         'username': username,
+        'display_name': display_name,
         'room_id': None,
         'authenticated': True,
         'session_id': session_id,
     }
-    await _send(ws, {'type': 'auth_ok', 'username': username})
+    await _send(ws, {'type': 'auth_ok', 'username': username, 'display_name': display_name})
 
 
 async def _handle_match(ws):
@@ -447,9 +505,14 @@ async def _handle_match(ws):
 
         # Create room for matched pair
         room_id = _generate_room_id()
+        od = o_info.get('display_name', o_info['username'])
+        md = info.get('display_name', info['username'])
+        oa = o_info['username']
+        ma = info['username']
         rooms[room_id] = {
             'players': [opponent, ws],
-            'usernames': [o_info['username'], info['username']],
+            'usernames': [od, md],
+            'accounts': [oa, ma],
             'spectators': set(),
             'board': make_board(),
             'current_player': 1,
@@ -466,13 +529,13 @@ async def _handle_match(ws):
             'type': 'start', 'color': 1,
             'message': '您执黑（先手）',
             'room_id': room_id,
-            'usernames': [o_info['username'], info['username']],
+            'usernames': [od, md],
         })
         await _send(ws, {
             'type': 'start', 'color': 2,
             'message': '您执白（后手），黑棋先走',
             'room_id': room_id,
-            'usernames': [o_info['username'], info['username']],
+            'usernames': [od, md],
         })
         await _send(opponent, {'type': 'turn', 'color': 1})
         await _start_timer(room_id)
@@ -505,7 +568,8 @@ async def _handle_create_room(ws):
     room_id = _generate_room_id()
     rooms[room_id] = {
         'players': [ws, None],
-        'usernames': [info['username'], None],
+        'usernames': [info.get('display_name', info['username']), None],
+        'accounts': [info['username'], None],
         'spectators': set(),
         'board': make_board(),
         'current_player': 1,
@@ -549,13 +613,20 @@ async def _handle_join_room(ws, room_id, as_spectator):
         })
 
         # Send current board state to spectator
-        if room['state'] == 'playing' or room['state'] == 'finished':
+        if room['state'] in ('playing', 'finished'):
             for move in room.get('moves', []):
                 await _send(ws, {'type': 'move', 'x': move[0], 'y': move[1], 'color': move[2]})
             if room['state'] == 'playing':
                 await _send(ws, {'type': 'turn', 'color': room['current_player']})
             if room['state'] == 'finished':
-                await _send(ws, {'type': 'game_over', 'winner': '游戏已结束'})
+                w_idx = room.get('_winner')
+                if w_idx is not None and w_idx >= 0 and w_idx < len(room.get('usernames', [])):
+                    winner_name = room['usernames'][w_idx]
+                elif w_idx == -1:
+                    winner_name = '平局'
+                else:
+                    winner_name = '游戏已结束'
+                await _send(ws, {'type': 'game_over', 'winner': winner_name, 'reason': '对局已结束'})
 
         await _broadcast_room(room_id, {
             'type': 'spectator_count',
@@ -567,7 +638,8 @@ async def _handle_join_room(ws, room_id, as_spectator):
     # Join as player
     slot = 0 if room['players'][0] is None else 1
     room['players'][slot] = ws
-    room['usernames'][slot] = info['username']
+    room['usernames'][slot] = info.get('display_name', info['username'])
+    room['accounts'][slot] = info['username']
     info['room_id'] = room_id
 
     await _send(ws, {
@@ -581,7 +653,7 @@ async def _handle_join_room(ws, room_id, as_spectator):
     # Notify the other player
     other_idx = 1 - slot
     await _broadcast_to_player(room, other_idx, {
-        'type': 'player_joined', 'username': info['username']
+        'type': 'player_joined', 'username': info.get('display_name', info['username'])
     })
 
     # If both players present, start the game
@@ -659,9 +731,10 @@ async def _handle_leave_room(ws):
     if room['players'][other_idx] and room['state'] == 'playing':
         # The game was in progress, other player wins
         room['state'] = 'finished'
+        room['_winner'] = other_idx
         await _cancel_timer(room_id)
         winner_username = room['usernames'][other_idx] or '对手'
-        await _broadcast_to_player(room, other_idx, {
+        await _broadcast_room(room_id, {
             'type': 'game_over', 'winner': winner_username, 'reason': '对方离开了房间'
         })
         _save_game_record(room_id, winner_username, '对方离开了房间')
@@ -727,7 +800,6 @@ async def _handle_move(ws, x, y):
     if winner:
         room['state'] = 'finished'
         room['_winner'] = player_idx
-        winner_username = room['usernames'][player_idx]
         game_over_msg = {
             'type': 'game_over',
             'winner': winner_username,
@@ -739,7 +811,7 @@ async def _handle_move(ws, x, y):
             if p:
                 await _send(p, game_over_msg)
         for s in room.get('spectators', set()):
-            await _send(s, {'type': 'game_over', 'winner': winner_username, 'reason': '五子连珠', 'win_line': win_line})
+            await _send(s, game_over_msg)
         await _broadcast_room(room_id, {
             'type': 'chat', 'username': '系统', 'message': f'{winner_username} 获胜（五子连珠）！'
         })
@@ -750,9 +822,8 @@ async def _handle_move(ws, x, y):
         # Check for draw (board full)
         if len(room['moves']) >= BOARD_SIZE * BOARD_SIZE:
             room['state'] = 'finished'
-            for p in room['players']:
-                if p:
-                    await _send(p, {'type': 'game_over', 'winner': '平局', 'reason': '棋盘已满'})
+            room['_winner'] = -1
+            await _broadcast_room(room_id, {'type': 'game_over', 'winner': '平局', 'reason': '棋盘已满'})
             _save_game_record(room_id, '平局', '棋盘已满')
             _executor.submit(delete_active_game, room_id)
             _start_rematch_timer(room_id)
@@ -781,7 +852,7 @@ async def _handle_chat(ws, message):
 
     await _broadcast_room(info['room_id'], {
         'type': 'chat',
-        'username': info['username'],
+        'username': info.get('display_name', info['username']),
         'message': message.strip(),
     })
 
@@ -827,7 +898,7 @@ async def _handle_request_undo(ws):
     if other_ws:
         await _send(other_ws, {
             'type': 'request_undo',
-            'from': info['username'],
+            'from': info.get('display_name', info['username']),
         })
 
 
@@ -927,22 +998,23 @@ async def _handle_resign(ws):
         return
 
     room['state'] = 'finished'
+    room['_winner'] = 1 - player_idx
     await _cancel_timer(room_id)
 
     other_idx = 1 - player_idx
     winner_username = room['usernames'][other_idx] or '对手'
-    loser_username = info['username']
+    loser_username = info.get('display_name', info['username'])
 
+    game_over_msg = {
+        'type': 'game_over',
+        'winner': winner_username,
+        'reason': f'{loser_username} 认输',
+    }
     for i, p in enumerate(room['players']):
         if p:
-            await _send(p, {
-                'type': 'game_over',
-                'winner': winner_username,
-                'reason': f'{loser_username} 认输',
-                'moves': room['moves'],
-            })
+            await _send(p, {**game_over_msg, 'moves': room['moves']})
     for s in room.get('spectators', set()):
-        await _send(s, {'type': 'game_over', 'winner': winner_username, 'reason': f'{loser_username} 认输'})
+        await _send(s, game_over_msg)
 
     await _broadcast_room(room_id, {
         'type': 'chat', 'username': '系统', 'message': f'{loser_username} 认输，{winner_username} 获胜！'
@@ -991,15 +1063,23 @@ async def _handle_rematch(ws):
     if len(ready) >= 2:
         # Both ready, restart game with swapped colors
         room.pop(rematch_key, None)
+        room.pop('_undo_count_0', None)
+        room.pop('_undo_count_1', None)
         room['board'] = make_board()
         room['moves'] = []
         room['state'] = 'playing'
 
-        # Swap colors: previous black becomes white
-        prev_black_idx = 0 if room['_winner'] != 0 else 1
-        new_black_idx = 1 - prev_black_idx
+        # Swap colors for rematch: loser becomes black.
+        # For draws (_winner == -1), keep original assignment.
+        winner = room.get('_winner', 0)
+        if winner == -1:
+            new_black_idx = 1  # white becomes black
+        else:
+            new_black_idx = 1 - winner  # loser becomes black
         room['players'] = [room['players'][new_black_idx], room['players'][1 - new_black_idx]]
         room['usernames'] = [room['usernames'][new_black_idx], room['usernames'][1 - new_black_idx]]
+        if room.get('accounts'):
+            room['accounts'] = [room['accounts'][new_black_idx], room['accounts'][1 - new_black_idx]]
         room['current_player'] = 1
 
         for i in range(2):
@@ -1023,7 +1103,7 @@ async def _handle_rematch(ws):
     else:
         await _send(ws, {'type': 'rematch_waiting', 'message': '等待对方确认...'})
         if other_ws:
-            await _send(other_ws, {'type': 'rematch_request', 'from': info['username']})
+            await _send(other_ws, {'type': 'rematch_request', 'from': info.get('display_name', info['username'])})
 
 
 async def _periodic_cleanup(app):
@@ -1141,6 +1221,7 @@ def main():
     app.router.add_get('/api/games', handle_games)
     app.router.add_get('/api/games/{id}', handle_game_detail)
     app.router.add_get('/api/profile', handle_profile)
+    app.router.add_post('/api/profile/update', handle_update_profile)
     app.router.add_get('/ws', handle_ws)
 
     # Periodic cleanup task (fire-and-forget, don't await the infinite loop)
