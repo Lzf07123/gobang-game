@@ -361,11 +361,14 @@ function handleMessage(data) {
         document.getElementById('avatar').textContent = displayName.charAt(0).toUpperCase();
       }
       setStatus('已连接，准备就绪');
+      // Flush any queued messages BEFORE resetGameState (which clears the queue)
+      const queued = pendingMessages.splice(0);
       resetGameState();
       drawBoard();
-      // Flush any queued messages
-      while (pendingMessages.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(pendingMessages.shift());
+      for (const msg of queued) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(msg);
+        }
       }
       break;
 
@@ -590,14 +593,23 @@ function sendOrQueue(msg) {
 
 // ===== Room System =====
 function createRoom() {
+  document.getElementById('room-visibility-overlay').style.display = 'flex';
+}
+
+function confirmCreateRoom(isPublic) {
+  document.getElementById('room-visibility-overlay').style.display = 'none';
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    sendOrQueue(JSON.stringify({ type: 'create_room' }));
+    sendOrQueue(JSON.stringify({ type: 'create_room', is_public: isPublic }));
     return;
   }
-  ws.send(JSON.stringify({ type: 'create_room' }));
-  setStatus('正在创建房间...');
+  ws.send(JSON.stringify({ type: 'create_room', is_public: isPublic }));
+  setStatus(isPublic ? '正在创建公开房间...' : '正在创建私人房间...');
   document.getElementById('create-room-btn').disabled = true;
   document.getElementById('match-btn').disabled = true;
+}
+
+function cancelCreateRoom() {
+  document.getElementById('room-visibility-overlay').style.display = 'none';
 }
 
 function joinRoom() {
@@ -910,6 +922,7 @@ function showRoomBrowserOverlay() {
   } else {
     roomBrowserRooms.forEach(r => {
       const isPlaying = r.state === 'playing';
+      const isPublic = r.is_public !== false;
       const el = document.createElement('div');
       el.className = 'room-browser-item';
 
@@ -938,21 +951,28 @@ function showRoomBrowserOverlay() {
         el.appendChild(specSpan);
       }
 
-      const actionBtn = document.createElement('button');
-      actionBtn.className = 'btn-small ' + (isPlaying ? 'room-browser-spectate' : 'room-browser-join');
-      actionBtn.textContent = isPlaying ? '观战' : '加入';
-      actionBtn.onclick = () => {
-        if (isPlaying) {
-          document.getElementById('spectate-code-input').value = r.room_id;
-          hideRoomBrowser();
-          spectateRoom();
-        } else {
-          document.getElementById('room-code-input').value = r.room_id;
-          hideRoomBrowser();
-          joinRoom();
-        }
-      };
-      el.appendChild(actionBtn);
+      const visBadge = document.createElement('span');
+      visBadge.className = 'room-browser-vis';
+      visBadge.textContent = isPublic ? '🌐' : '🔒 私人';
+      el.appendChild(visBadge);
+
+      if (isPublic) {
+        const actionBtn = document.createElement('button');
+        actionBtn.className = 'btn-small ' + (isPlaying ? 'room-browser-spectate' : 'room-browser-join');
+        actionBtn.textContent = isPlaying ? '观战' : '加入';
+        actionBtn.onclick = () => {
+          if (isPlaying) {
+            document.getElementById('spectate-code-input').value = r.room_id;
+            hideRoomBrowser();
+            spectateRoom();
+          } else {
+            document.getElementById('room-code-input').value = r.room_id;
+            hideRoomBrowser();
+            joinRoom();
+          }
+        };
+        el.appendChild(actionBtn);
+      }
 
       list.appendChild(el);
     });

@@ -55,6 +55,8 @@ _WS_RATELIMIT_WINDOW = 1.0
 # Timer tasks
 _timer_tasks = {}     # room_id -> asyncio.Task
 _rematch_tasks = {}   # room_id -> asyncio.Task (delayed cleanup after game end)
+_disconnect_grace = {}  # (username, session_id) -> {'task': asyncio.Task, 'ws': ws, 'room_id': str|None}
+_GRACE_PERIOD = 5  # seconds
 _cleanup_task = None  # periodic cleanup task
 
 AUTH_TIMEOUT = 10  # seconds to wait for auth message
@@ -296,6 +298,7 @@ async def handle_list_rooms(request):
                 'players': [u for u in room.get('usernames', []) if u],
                 'state': room['state'],
                 'spectator_count': spectators,
+                'is_public': room.get('is_public', False),
                 'waiting_seconds': int(now - room.get('_created_at', now)) if room['state'] == 'waiting' else 0,
             })
     return web.json_response({'rooms': room_list})
@@ -463,7 +466,7 @@ async def _on_message(ws, raw):
     handlers = {
         'match': lambda: _handle_match(ws),
         'cancel_match': lambda: _handle_cancel_match(ws),
-        'create_room': lambda: _handle_create_room(ws),
+        'create_room': lambda: _handle_create_room(ws, data.get('is_public', False)),
         'join_room': lambda: _handle_join_room(ws, data.get('room_id', ''), data.get('as_spectator', False)),
         'leave_room': lambda: _handle_leave_room(ws),
         'move': lambda: _handle_move(ws, data.get('x'), data.get('y')),
@@ -521,14 +524,95 @@ async def _handle_auth(ws, token):
             pass
 
     pending_auth.pop(ws, None)
+    # Cancel any pending disconnect grace period for this session
+    key = (username, session_id)
+    grace = _disconnect_grace.pop(key, None)
+    if grace:
+        grace['task'].cancel()
+
+    # Find and replace any existing stale connection with same session_id.
+    # Prefer an active client (e.g., another tab) over the grace-period ws.
+    transferred_room_id = None
+    old_ws = None
+    for candidate_ws, candidate_info in list(clients.items()):
+        if candidate_info.get('username') == username and candidate_info.get('session_id') == session_id:
+            old_ws = candidate_ws
+            transferred_room_id = candidate_info.get('room_id')
+            break
+    if old_ws is None and grace:
+        old_ws = grace.get('ws')
+        transferred_room_id = grace.get('room_id')
+
+    if old_ws and old_ws != ws:
+        clients.pop(old_ws, None)
+        # Replace old ws references in waiting_queue
+        if old_ws in waiting_queue:
+            del waiting_queue[old_ws]
+            waiting_queue[ws] = True
+        if transferred_room_id and transferred_room_id in rooms:
+            room = rooms[transferred_room_id]
+            for i, p in enumerate(room.get('players', [])):
+                if p is old_ws:
+                    room['players'][i] = ws
+            if old_ws in room.get('spectators', set()):
+                room['spectators'].discard(old_ws)
+                room['spectators'].add(ws)
+            if room.get('creator') is old_ws:
+                room['creator'] = ws
+        try:
+            await old_ws.close()
+        except Exception:
+            pass
+
     clients[ws] = {
         'username': username,
         'display_name': display_name,
-        'room_id': None,
+        'room_id': transferred_room_id,
         'authenticated': True,
         'session_id': session_id,
     }
     await _send(ws, {'type': 'auth_ok', 'username': username, 'display_name': display_name})
+
+    # If reconnected to an active room, sync state to the client
+    if transferred_room_id and transferred_room_id in rooms:
+        room = rooms[transferred_room_id]
+        if room['state'] in ('waiting', 'playing'):
+            player_idx = None
+            for i, p in enumerate(room.get('players', [])):
+                if p is ws:
+                    player_idx = i
+                    break
+            if player_idx is not None:
+                if room['state'] == 'waiting':
+                    # Host reconnecting to a waiting room
+                    await _send(ws, {'type': 'room_created', 'room_id': transferred_room_id})
+                    await _send(ws, {'type': 'waiting', 'message': f'房间 {transferred_room_id} 已创建，等待对手加入...'})
+                else:
+                    color = 1 if player_idx == 0 else 2
+                    await _send(ws, {
+                        'type': 'start', 'color': color,
+                        'message': f'您执{"黑" if color == 1 else "白"}',
+                        'room_id': transferred_room_id,
+                        'usernames': room['usernames'],
+                    })
+                    # Replay moves on new client
+                    for move in room.get('moves', []):
+                        await _send(ws, {'type': 'move', 'x': move[0], 'y': move[1], 'color': move[2]})
+                    await _send(ws, {'type': 'turn', 'color': room['current_player']})
+            else:
+                # Spectator reconnecting
+                await _send(ws, {
+                    'type': 'room_joined',
+                    'room_id': transferred_room_id,
+                    'as_spectator': True,
+                    'players': room['usernames'],
+                    'state': room['state'],
+                    'spectator_count': len(room.get('spectators', set())),
+                })
+                for move in room.get('moves', []):
+                    await _send(ws, {'type': 'move', 'x': move[0], 'y': move[1], 'color': move[2]})
+                if room['state'] == 'playing':
+                    await _send(ws, {'type': 'turn', 'color': room['current_player']})
 
 
 async def _handle_match(ws):
@@ -578,6 +662,7 @@ async def _handle_match(ws):
             'state': 'playing',
             'creator': opponent,
             'matchmade': True,
+            'is_public': False,
             '_created_at': time.time(),
         }
         info['room_id'] = room_id
@@ -611,7 +696,7 @@ async def _handle_cancel_match(ws):
     await _send(ws, {'type': 'match_cancelled', 'message': '已取消匹配'})
 
 
-async def _handle_create_room(ws):
+async def _handle_create_room(ws, is_public=False):
     info = clients.get(ws)
     if not info:
         return
@@ -634,6 +719,7 @@ async def _handle_create_room(ws):
         'state': 'waiting',
         'creator': ws,
         'matchmade': False,
+        'is_public': is_public,
         '_created_at': time.time(),
     }
     waiting_queue.pop(ws, None)
@@ -1257,6 +1343,18 @@ async def _periodic_cleanup(app):
                         if not any(id(w) == ws_id for w in clients)]
             for ws_id in stale_ws:
                 del _ws_ratelimit[ws_id]
+
+            # Clean stale grace periods (safety net)
+            stale_grace = []
+            for key, g in list(_disconnect_grace.items()):
+                if g['ws'] not in clients and not any(
+                    info.get('session_id') == key[1] for info in clients.values()
+                ):
+                    stale_grace.append(key)
+            for key in stale_grace:
+                g = _disconnect_grace.pop(key, None)
+                if g:
+                    g['task'].cancel()
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}", exc_info=True)
 
@@ -1269,19 +1367,42 @@ async def _on_disconnect(ws):
     if ws in waiting_queue:
         del waiting_queue[ws]
 
-    # Leave room if in one
-    if ws in clients:
-        info = clients[ws]
-        await _handle_leave_room(ws)
-        # Only clear session if this was the active session
-        try:
-            stored = await _run_db(get_user_session, info['username'])
-            if stored == info.get('session_id', ''):
-                await _run_db(clear_user_session, info['username'])
-        except Exception:
-            pass
+    if ws not in clients:
+        return
 
-    clients.pop(ws, None)
+    info = clients[ws]
+    username = info['username']
+    session_id = info.get('session_id', '')
+    room_id = info.get('room_id')
+
+    # Start grace period — don't leave room yet, wait for potential reconnect.
+    # Keep ws in clients so _handle_leave_room can look up room info on expiry.
+    async def _graceful_disconnect():
+        try:
+            await asyncio.sleep(_GRACE_PERIOD)
+        except asyncio.CancelledError:
+            return
+        key = (username, session_id)
+        grace = _disconnect_grace.pop(key, None)
+        if grace is None:
+            return
+        try:
+            await _handle_leave_room(ws)
+        except Exception:
+            logger.error(f"Grace leave failed for {username}", exc_info=True)
+        finally:
+            clients.pop(ws, None)
+
+    key = (username, session_id)
+    # Cancel any existing grace task for this session
+    old = _disconnect_grace.pop(key, None)
+    if old:
+        old['task'].cancel()
+    _disconnect_grace[key] = {
+        'task': asyncio.create_task(_graceful_disconnect()),
+        'ws': ws,
+        'room_id': room_id,
+    }
 
 
 # ===== Middleware =====
@@ -1376,6 +1497,9 @@ def main():
         for task in _rematch_tasks.values():
             task.cancel()
         _rematch_tasks.clear()
+        for g in _disconnect_grace.values():
+            g['task'].cancel()
+        _disconnect_grace.clear()
 
         # Save in-progress games before clearing memory
         for room_id, room in list(rooms.items()):
