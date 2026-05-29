@@ -56,7 +56,6 @@ cd ../public && python -m http.server 3000
 
 ```
 gobang/
-├── .env                        docker-compose 变量 (git 忽略)
 ├── .env.example                根目录环境变量模板
 ├── docker-compose.yaml         Docker 编排
 ├── c-core/                     C 核心: 棋盘管理、五子连珠判定、禁手检测、局面评估
@@ -65,7 +64,6 @@ gobang/
 │   ├── evaluate.c / evaluate.h 局面评估函数（为 AI 预留）
 │   └── Makefile
 ├── python-server/              Python 后端: HTTP + WebSocket 服务
-│   ├── .env                    应用配置 (git 忽略)
 │   ├── .env.example            后端环境变量模板
 │   ├── server.py               主服务 (aiohttp) — HTTP 认证 + WebSocket 对局
 │   ├── auth.py                 注册/登录/JWT/会话管理
